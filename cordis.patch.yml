@@ -1,0 +1,6 @@
+# dsh-timer: cordis bundle patch that registers the plugin in the profile.
+# config is empty; jobsDir is an optional override (default <profileDir>/timers/, or the DSH_TIMER_JOBS_DIR env var), see README.
+- insert:
+    - id: dsh-timer
+      name: 'dsh-timer'
+      config: {}

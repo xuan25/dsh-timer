@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "dsh-timer job file format contract (semantics aligned with systemd timer units). The structural keywords below hold for any job file, including the at-least-one-non-null-trigger rule encoded in the root allOf; value syntax (cron / ISO instants, time spans, IANA timezone names, DST gaps) and the remaining cross-field rules are enforced by the plugin's built-in validator (src/validator.ts) at load time, which is stricter than this schema.",
+  "title": "dsh-timer job file",
+  "description": "Job spec for one scheduled job. Each job is one file named <id>.json under the plugin jobsDir, where the file name is the job id. The file is revalidated on every load, and a file that fails validation is rejected and reported until it is fixed. A spec needs at least one of onCalendar, onActiveSec, or onStartupSec set to a non-null value (a trigger set to null is explicitly not used), plus a run block with a non-empty prompt. The enable field decides whether the job is enabled.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run"],
+  "properties": {
+    "enable": {
+      "type": "boolean",
+      "default": true,
+      "description": "Switches the job on or off. When false the job is stored disabled: it is never scheduled, but it can still be run manually and enabled again by setting the field back to true. Omitting the field, or setting it to true, stores the job enabled."
+    },
+    "onCalendar": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Calendar conditions that trigger the job, evaluated in the job's timezone. Each element is a cron expression with 5 or 6 fields, or a full ISO 8601 datetime that fires once and is then consumed. A cron expression that never matches a time is accepted but never fires. Setting the field to null means the calendar trigger is explicitly not used."
+    },
+    "onActiveSec": {
+      "type": ["string", "null"],
+      "description": "Time span such as 30s or 5min. The job waits that long after its last activation before running again. Activation is the start moment of the most recent run, or the process start for the first run. Setting the field to null means the trigger is explicitly not used."
+    },
+    "onStartupSec": {
+      "type": ["string", "null"],
+      "description": "Time span such as 5s or 1h. The job fires once, that long after process start. The fired flag lives in process memory: it survives disable and enable, but a process restart fires the job once more. Setting the field to null means the trigger is explicitly not used."
+    },
+    "timeZone": {
+      "type": "string",
+      "description": "IANA timezone name such as Asia/Shanghai. Calendar conditions are evaluated in this timezone instead of the system timezone. ISO datetimes carry their own offset and are not shifted."
+    },
+    "persistent": {
+      "type": "boolean",
+      "default": false,
+      "description": "Controls what happens to calendar triggers missed while the process was down or the job was disabled. When true, exactly one catch-up fire is produced after recovery, rebased to the current moment. When false, missed triggers are dropped silently."
+    },
+    "deferReactivation": {
+      "type": "boolean",
+      "default": false,
+      "description": "Controls how calendar conditions advance across a run. When true, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When false, the phase advances at every due moment even while a run is in progress (a due moment under overlap=skip is consumed in place, no catch-up fire). The setting applies only to jobs with calendar conditions; on other jobs the value is ignored."
+    },
+    "runtimeMaxSec": {
+      "type": ["string", "null"],
+      "description": "A span such as 2m that bounds the duration of a single run, or 0 / infinity / null for no limit; omitting the field means no limit. A run that exceeds the limit is cancelled and recorded as failed."
+    },
+    "overlap": {
+      "type": "string",
+      "enum": ["skip", "stop", "allow"],
+      "default": "skip",
+      "description": "What to do when a trigger fires while a run is in progress. skip consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points), stop cancels the in-progress run first and then starts, and allow starts a parallel run."
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt"],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Instruction that starts each run. A result summary instruction is appended to the session automatically. A prompt that consists only of whitespace is rejected."
+        },
+        "cwd": {
+          "type": ["string", "null"],
+          "description": "Working directory of the run session. It also bounds the write sandbox when the policy is workspace-write. The default is /workspace/timer/runs/<id>/. Omit the field or set it to null to keep the default."
+        },
+        "preset": {
+          "type": ["string", "null"],
+          "description": "Agent preset of the run session, mounted through the host's agent preset service when the session is created. Naming a preset that is unresolvable or broken fails the run as create_failed. Omit the field or set it to null to mount the deployment's default preset (the framework's baseline composition when the host provides no preset service or no usable default)."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Model route of the run session, fixed when the session is created: a `provider/model` string (the first slash splits provider from model) or a bare model id (it rides the deployment's default provider, when the deployment provides a default model selection). Omit the field or set it to null to use the deployment's default model selection, when a source provides it (the host's agent-default-model service, or the settings section/document that service is built on); without a resolvable default selection a run's first turn fails and the framework's no-provider/model error is recorded in the run record."
+        },
+        "policy": {
+          "type": ["string", "null"],
+          "enum": ["read-only", "workspace-write", "danger-full-access", null],
+          "description": "File access policy of the run session: read-only, workspace-write, or danger-full-access. Omit the field or set it to null to use the deployment default."
+        }
+      },
+      "description": "Execution block of the job. Each run creates a fresh agent session that fully inherits the profile environment."
+    }
+  },
+  "allOf": [
+    {
+      "not": {
+        "allOf": [
+          {
+            "anyOf": [
+              { "not": { "required": ["onCalendar"] } },
+              { "required": ["onCalendar"], "properties": { "onCalendar": { "const": null } } }
+            ]
+          },
+          {
+            "anyOf": [
+              { "not": { "required": ["onActiveSec"] } },
+              { "required": ["onActiveSec"], "properties": { "onActiveSec": { "const": null } } }
+            ]
+          },
+          {
+            "anyOf": [
+              { "not": { "required": ["onStartupSec"] } },
+              { "required": ["onStartupSec"], "properties": { "onStartupSec": { "const": null } } }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "examples": [
+    {
+      "onCalendar": ["0 9 * * 1-5"],
+      "timeZone": "Asia/Shanghai",
+      "deferReactivation": true,
+      "overlap": "skip",
+      "run": { "prompt": "Inspect new reports under /workspace/reports in the last 24h and summarize them" }
+    },
+    {
+      "onActiveSec": "30min",
+      "persistent": true,
+      "run": { "prompt": "Output a one-sentence heartbeat with the current time" }
+    },
+    {
+      "onCalendar": ["2026-10-01T00:00:00"],
+      "timeZone": "Asia/Shanghai",
+      "run": { "prompt": "National Day reminder task", "policy": "read-only" }
+    },
+    {
+      "onCalendar": ["0 8 * * *"],
+      "enable": false,
+      "run": { "prompt": "Morning digest (stored disabled until it is enabled again)" }
+    }
+  ]
+}

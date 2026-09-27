@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "dsh-timer state file format contract. The plugin is the sole writer of these files; they are read-only for operators. The structural keywords below hold for the shape the plugin writes; on load the plugin runs a full-shape validation, and unknown extra keys (such as the legacy `missed` field and the legacy per-condition `lastTriggerMs`) are tolerated and never written back, and run records evicted from the FIFO before settlement may omit optional fields.",
+  "title": "dsh-timer state file",
+  "description": "Runtime state of one scheduled job. Each job has one state file named <jobId>.json under the state subdirectory of the plugin jobsDir (the state directory is excluded from the directory watch). The in-memory state is authoritative and the file is a best-effort mirror: a failed write does not block scheduling, and a missing file means the job has no persisted state yet. The plugin creates the file when the job is first loaded.",
+  "type": "object",
+  "required": ["schemaVersion", "jobId", "lastActivationMs", "calendars", "runs"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "State file schema version. A file whose version does not equal the current one is treated as corrupt: an enabled job is reset to a fresh state, a disabled job keeps its in-memory state."
+    },
+    "jobId": {
+      "type": "string",
+      "description": "Job id. It equals the name of this state file without the .json extension, and the name of the job file under the jobsDir."
+    },
+    "lastActivationMs": {
+      "type": ["number", "null"],
+      "description": "Epoch milliseconds of the start moment of the most recent run (the activation base of onActiveSec). Null when the job has no run history in its state."
+    },
+    "lastTriggerMs": {
+      "type": ["number", "null"],
+      "description": "Epoch milliseconds of the job's last on-calendar elapse moment (a fired trigger, or a due trigger consumed in place by an overlap=skip — the recompute anchor, one shared moment for all of the job's calendar conditions). Null when no on-calendar elapse has been persisted yet; absent in files written by older versions (tolerated on load, treated as no anchor). Never advanced by monotonic or manual fires."
+    },
+    "calendars": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["value", "kind", "neverMatch", "consumed", "nextFireMs"],
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "The calendar condition value (a cron expression or an ISO datetime), identical to the key of this entry."
+          },
+          "kind": {
+            "type": ["string", "null"],
+            "description": "Condition kind: cron or iso."
+          },
+          "neverMatch": {
+            "type": "boolean",
+            "description": "True when the cron expression is accepted but never matches a time; such a condition is reported as having no future match."
+          },
+          "consumed": {
+            "type": "boolean",
+            "description": "True when a one-shot (ISO datetime) condition has already fired in the persisted state; the condition then never fires again."
+          },
+          "nextFireMs": {
+            "type": ["number", "null"],
+            "description": "Epoch milliseconds of the next trigger moment of this condition, or null when the condition has no future match (consumed one-shot or never-matching cron)."
+          }
+        }
+      },
+      "description": "Per-condition state of the job's calendar conditions, keyed by the condition value exactly as written in the job file. Monotonic conditions (onActiveSec, onStartupSec) are not persisted: they are derived from lastActivationMs and the process start moment."
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["runId", "startedAt", "status"],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "description": "Unique id of this run; the status output shows the full id, and the run verb report shows its first eight characters."
+          },
+          "sessionId": {
+            "type": ["string", "null"],
+            "description": "Session id of the run session; the session transcript is the permanent audit trail of the run."
+          },
+          "trigger": {
+            "type": "string",
+            "description": "What started the run: one of scheduled, monotonic, startup, manual."
+          },
+          "startedAt": {
+            "type": "number",
+            "description": "Epoch milliseconds when the run started."
+          },
+          "finishedAt": {
+            "type": ["number", "null"],
+            "description": "Epoch milliseconds when the run settled. Null while the run is in progress."
+          },
+          "durationMs": {
+            "type": ["number", "null"],
+            "description": "Run duration in milliseconds. Null while the run is in progress."
+          },
+          "status": {
+            "type": "string",
+            "description": "running while the run is in progress; finished or failed after it settles. A record that was still running when the process ended is backfilled as failed with cause interrupted on the next start."
+          },
+          "cause": {
+            "type": ["string", "null"],
+            "description": "Failure reason when the status is failed: timeout (the run exceeded runtimeMaxSec), cancelled, interrupted (process restart or stop), turn_error, or create_failed (the run session could not be created). Null for a finished run."
+          },
+          "summary": {
+            "type": ["string", "null"],
+            "description": "Result summary of the run, truncated to 2000 characters; an empty string when the session produced no summary. Null while the run is in progress."
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "Error detail of a failed run, such as the interruption note on a process restart."
+          }
+        }
+      },
+      "description": "Run audit records, oldest first. The writer keeps at most 50 entries (FIFO). A record that started but has not settled yet carries explicit nulls for cause, finishedAt, durationMs, and summary; a record evicted by the FIFO before settlement is re-appended at settlement with the fields that are known."
+    }
+  },
+  "examples": [
+    {
+      "schemaVersion": 1,
+      "jobId": "daily-check",
+      "lastActivationMs": null,
+      "lastTriggerMs": null,
+      "calendars": {
+        "0 9 * * 1-5": {
+          "value": "0 9 * * 1-5",
+          "kind": "cron",
+          "neverMatch": false,
+          "consumed": false,
+          "nextFireMs": 1792897200000
+        }
+      },
+      "runs": []
+    },
+    {
+      "schemaVersion": 1,
+      "jobId": "heartbeat",
+      "lastActivationMs": 1792897200000,
+      "lastTriggerMs": null,
+      "calendars": {},
+      "runs": [
+        {
+          "runId": "01J9ZKQ4M6N8P2R4S5T7V9W0XY",
+          "sessionId": "9f8e7d6c-5b2a-4e1f-8c3d-2a1b0c9d8e7f",
+          "trigger": "scheduled",
+          "startedAt": 1792897200000,
+          "finishedAt": 1792897234000,
+          "durationMs": 34000,
+          "status": "finished",
+          "cause": null,
+          "summary": "One-sentence heartbeat with the current time",
+          "error": null
+        },
+        {
+          "runId": "01J9ZKQ4M6N8P2R4S5T7V9W0AB",
+          "sessionId": "1a2b3c4d-5e6f-4a5b-8c7d-9e0f1a2b3c4d",
+          "startedAt": 1792983600000,
+          "finishedAt": null,
+          "durationMs": null,
+          "status": "running",
+          "cause": null,
+          "summary": null,
+          "error": null
+        }
+      ]
+    }
+  ]
+}
