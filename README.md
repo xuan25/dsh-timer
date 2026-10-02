@@ -1,6 +1,13 @@
 # dsh-timer
 
-dsh-timer is an in-process scheduled-task plugin for dsh that implements the common subset of systemd.timer semantics: a job is a plain JSON file in a job directory, and a 30-second tick starts a fresh prompted session whenever any trigger expires (all conditions that expire in the same tick are aggregated into one run), recording the result in a per-job state file.
+dsh-timer gives a dsh deployment a built-in job scheduler: when a trigger expires the plugin starts a fresh prompted session, so recurring work - daily reports, periodic checks, one-shot tasks - runs on schedule inside the dsh process.
+
+- Jobs live in a job directory, written by hand or with the eight-verb `timer` tool
+- Three trigger kinds: cron expressions and one-shot ISO times, intervals counted from the last run, and one-shot startup delays
+- Each run is a fresh prompted session with a configurable working directory, preset, model, and file policy
+- A per-job state file tracks the next trigger and the 50 most recent run records
+- systemd.timer-style behavior: persistent catch-up after downtime, overlap policies (skip/stop/allow), run-time limits, timezone and clock-rewind handling
+- Live rescan: the job directory is watched with a 500 ms debounce, so job edits take effect in seconds
 
 This README is the operations quick reference. The complete field reference with examples is [`schemas/job.schema.json`](./schemas/job.schema.json); usage details, examples, and troubleshooting live in the in-package skill [`skill/dsh-timer/SKILL.md`](./skill/dsh-timer/SKILL.md).
 
