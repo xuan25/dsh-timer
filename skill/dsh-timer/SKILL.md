@@ -17,7 +17,7 @@ Scheduled tasks are managed by the dsh-timer plugin. A task = `<jobsDir>/<id>.js
 | `run` | `id` | manually trigger once (unconditional start; disabled jobs allowed too — their in-memory model is used directly); returns immediately; recorded in state after completion |
 | `enable` | `id` | set the in-file `enable` field to true (atomic read-modify-write, then an immediate rescan; the onStartupSec already-fired flag is preserved via in-process memory) |
 | `disable` | `id` | set the in-file `enable` field to false, cancelling all in-progress runs of the job first; the job's in-memory model and state file are kept, so re-enabling restores the schedule with its run history |
-| `add` | `id`, `spec` | create/overwrite a job (upsert): the spec is validated first (an invalid spec throws and no file is written), then `<id>.json` is written and the directory rescanned; an existing job's spec file is overwritten and its resulting state is the new spec's `enable` field (absent = enabled) |
+| `add` | `id`, `spec` | create a job (create-only: a job with the same id already existing is rejected — to replace a job, `delete` it first, which also removes its state file): the spec is validated first (an invalid spec throws and no file is written), then `<id>.json` is written and the directory rescanned; the resulting enabled state is the new spec's `enable` field (absent = enabled) |
 | `delete` | `id` | delete the config file and state file; in-progress runs settle but do not write state or recompute |
 | `cancel` | `id` | cancel all in-progress runs of the job (recorded as failed/cancelled); a no-op if none are in progress |
 
@@ -59,6 +59,10 @@ timer verb=add id=heartbeat spec='{"onActiveSec":"30min","run":{"prompt":"One-se
 
 # one-shot reminder (consumed after firing; status marks it "[fired (one-shot ISO instant)]")
 timer verb=add id=ny-2027 spec='{"onCalendar":["2027-01-01T00:00:00+08:00"],"run":{"prompt":"New Year reminder"}}'
+
+# replace an existing job = delete (also removes its state file: next-fire times and one-shot marks do not survive) + add
+timer verb=delete id=heartbeat
+timer verb=add id=heartbeat spec='{"onActiveSec":"1h","run":{"prompt":"One-sentence heartbeat"}}'
 ```
 
 ## 4. Management channels
@@ -90,5 +94,7 @@ When status output looks wrong, check in this order:
 7. A condition shows `[no future match]` and the job's `next` is none → neverMatch (see §5); not a fault — periodic triggering requires changing the job spec.
 8. All trigger moments shifted together → suspected clock jump or system timezone change (see the clock & timezone bullet in §5); the plugin log records `clock rewound` / timezone-change entries.
 9. No jobs appear in the status overview at all → the plugin failed to start, or it started degraded: an unavailable designated job directory, or a profile that cannot be detected uniquely (or a host without the framework's harness-home service), fails plugin start; a missing resolved default directory means a degraded start (no jobs loaded, no state persisted) — check the plugin log.
+10. `add` reports `job id is required` → the `id` argument was omitted: `id` is a separate tool argument of the verb, not a field inside `spec` — retry with `id` set.
+11. `add` reports `already exists` → a job file with that id is present: to replace the job, `delete` it first (the delete also removes its state file — next-fire times and one-shot marks are lost), or use a different id.
 
 Evidence locations: the state file `<jobsDir>/state/<id>.json` (run records carry runId/sessionId — use the sessionId to look up the full run session record); the plugin log (prefix `dsh-timer`).

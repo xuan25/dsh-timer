@@ -28,7 +28,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         'run triggers one manual run immediately; disabled jobs may be run manually. ' +
         'enable and disable switch the in-file enable field of an existing job. ' +
         'disable first cancels the in-progress runs of the job, matching systemd disable --now. ' +
-        'add creates a new job or overwrites an existing one. ' +
+        'add creates a new job (create-only: it fails if a job with the same id already exists; delete the job first to replace it, which also removes its state file). ' +
         'delete removes the job config and its state file. ' +
         'cancel cancels all in-progress runs of a job. ' +
         'Job spec fields: onCalendar, onActiveSec, onStartupSec, timeZone, persistent, deferReactivation, runtimeMaxSec, overlap, enable, run.',

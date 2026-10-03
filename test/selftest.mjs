@@ -452,6 +452,28 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('scheduler.ts contains the per-job startRun rejection guard (tick + manualRun)', (schedulerSrc.match(/unexpected startRun rejection/g) ?? []).length >= 2)
 }
 {
+  // add = create only, and a missing id fails fast:
+  // the job-id assertion must reject a missing id before any String() coercion — the
+  // literal "undefined" is a grammatically legal job id, so coercing String(undefined)
+  // would turn an omitted id argument into a silently created job named "undefined".
+  // add no longer overwrites: a job whose file already exists is rejected before any
+  // write (the existing job's spec and state files are untouched); replacing a job is a
+  // delete followed by an add — the delete also removes the state file, so next-fire
+  // times and one-shot marks do not survive the replacement. The tool description and
+  // SKILL.md carry the full create-only wording; the README pins it on the verb rows
+  // (create-only on the add row, state-file wipe on the delete row).
+  const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
+  const toolSrc = readFileSync(path.join(PKG, 'src/tool.ts'), 'utf8')
+  const skillMd = readFileSync(path.join(PKG, 'skill/dsh-timer/SKILL.md'), 'utf8')
+  const readmeMd = readFileSync(path.join(PKG, 'README.md'), 'utf8')
+  ok('assertJobId rejects a missing id before any String() coercion', schedulerSrc.includes("if (typeof id !== 'string') throw new Error('job id is required"))
+  ok('addJob rejects an existing job id and never overwrites (the overwrote verb is gone)', schedulerSrc.includes('already exists; delete it first') && !schedulerSrc.includes('overwrote'))
+  ok('the tool description states add is create-only', toolSrc.includes('it fails if a job with the same id already exists'))
+  ok('SKILL.md states the delete state-file wipe on the add row', skillMd.includes('which also removes its state file'))
+  ok('README pins create-only on the add row and the state-file wipe on the delete row', readmeMd.includes('rejects if the id already exists') && readmeMd.includes('deletes the job file and its state file'))
+  ok('SKILL.md troubleshooting maps the missing-id and already-exists failures', skillMd.includes('a separate tool argument of the verb') && skillMd.includes('already exists'))
+}
+{
   // tick/create decoupling:
   // the tick never awaits startRun — a due job's create is a detached self-settling
   // lifecycle (the CREATE_TIMEOUT_MS deadline is the only escape for a hung create;
@@ -503,7 +525,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('SKILL.md overlap bullet states overlong runs swallow grid points', skillMd.includes('swallows grid points'))
   ok('the deprecated make-up-fire wording is gone from SKILL.md', !skillMd.includes('one delayed make-up fire') && !skillMd.includes('true: no make-up run') && !skillMd.includes('(no make-up run)'))
   ok('SKILL.md status row reports the job-level last on-calendar elapse', skillMd.includes('job-level last on-calendar elapse'))
-  ok('README overlap row states consume-in-place semantics', readmeMd.includes('consumed in place') && readmeMd.includes('swallows grid points'))
+  ok('README overlap row states consume-in-place semantics', readmeMd.includes('consumes the trigger in place') && readmeMd.includes('swallows grid points'))
   ok('the deprecated recompute wording is gone from README', !readmeMd.includes('max(runEnd, lastTrigger)'))
 }
 {

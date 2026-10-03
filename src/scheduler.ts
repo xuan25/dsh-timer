@@ -112,11 +112,16 @@ export class TimerScheduler {
     return writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n', { mode: STATE_MODE, dirMode: DIR_MODE })
   }
 
-  /** Validate an id against the job-id grammar; `detail` optionally extends the error message. */
+  /**
+   * Validate an id against the job-id grammar; `detail` optionally extends the error message.
+   * A missing id is rejected up front: `String(undefined)` produces the literal "undefined",
+   * which passes the grammar and would otherwise become a silently created job named
+   * "undefined" — an omission must fail fast instead.
+   */
   private assertJobId(id: string | undefined, detail?: string): string {
-    const key = String(id)
-    if (!JOB_ID_RE.test(key)) throw new Error(`invalid job id: ${key}${detail ? ` (${detail})` : ''}`)
-    return key
+    if (typeof id !== 'string') throw new Error('job id is required (id is a separate argument of the verb, not a field of the spec)')
+    if (!JOB_ID_RE.test(id)) throw new Error(`invalid job id: ${id}${detail ? ` (${detail})` : ''}`)
+    return id
   }
 
   /** Uniform not-found message for job verbs (shared by the thrown verbs and the status report). */
@@ -1176,27 +1181,29 @@ export class TimerScheduler {
   }
 
   /**
-   * add = upsert: a new id is created; an existing id has its spec file overwritten. The
-   * resulting enabled state is the new spec's `enable` field (absent → enabled; explicit
-   * false → disabled; overwriting an existing job applies the same rule).
+   * add = create only: the job file must not exist yet. An existing id is rejected without
+   * touching its spec or state file (accidental overwrite would lose the job's config and
+   * state); to replace a job, delete it first (timer delete) and add again — the delete
+   * also removes the state file, so next-fire times and one-shot marks do not survive.
+   * The resulting enabled state is the new spec's `enable` field (absent → enabled; explicit
+   * false → disabled).
    * Invalid spec → throw, file not written (no last-good; consistent with the whole-rejection semantics).
    */
   async addJob(id: string | undefined, spec: unknown): Promise<string> {
     const idKey = this.assertJobId(id, 'starts with a lowercase letter or digit, may contain hyphens, max 64 characters')
     const v = validateJob(spec, { nowMs: Date.now(), defaultTz: systemTimeZone() })
-    if (!v.ok) throw new Error(`spec invalid: ${v.errors.join('; ')}`)
+    if (!v.ok) throw new Error(`spec invalid: ${v.errors.join('; ')} (existing job, if any, is untouched)`)
     const jsonFile = this.jobFileOf(idKey)
-    let existed = false
     try {
       await fsp.access(jsonFile)
-      existed = true
-    } catch {
+      throw new Error(`job ${idKey} already exists; delete it first (timer delete id=${idKey}) or use a different id`)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
       /* new file */
     }
     await this.writeJsonFile(jsonFile, spec)
     const r = await this.rescan()
-    const verb = existed ? 'overwrote' : 'added'
-    return `${verb} job ${idKey} (currently ${r.enabled} enabled, ${r.disabled} disabled)`
+    return `added job ${idKey} (currently ${r.enabled} enabled, ${r.disabled} disabled)`
   }
 
   /**
