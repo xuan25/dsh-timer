@@ -46,7 +46,7 @@
           },
           "nextFireMs": {
             "type": ["number", "null"],
-            "description": "Epoch milliseconds of the next trigger moment of this condition, or null when the condition has no future match (consumed one-shot or never-matching cron)."
+            "description": "Epoch milliseconds of the next trigger moment of this condition, or null when the condition is temporarily suspended (a deferReactivation run in progress) or has no future match (consumed one-shot or never-matching cron)."
           }
         }
       },

@@ -460,8 +460,8 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }
 
   if (model.runtimeMaxMs !== null && model.runtimeMaxMs > 0) {
     // The max run duration uses the cordis timer service. The effect is registered on the
-    // timer service's own fiber, so neither run settlement nor package dispose reclaims it
-    // automatically; it is cancelled by the explicit run.maxTimer() dispose at run end.
+    // plugin's own fiber: run settlement (and scheduler stop) dispose it explicitly, and
+    // package dispose reclaims any leftover timer automatically (redundant but safe).
     run.maxTimer = ctx.timeout(() => {
       if (run.settled) return
       run.pendingCause = 'timeout'

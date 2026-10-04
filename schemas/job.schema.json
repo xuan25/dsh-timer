@@ -27,7 +27,7 @@
     },
     "timeZone": {
       "type": "string",
-      "description": "IANA timezone name such as Asia/Shanghai. Calendar conditions are evaluated in this timezone instead of the system timezone. ISO datetimes carry their own offset and are not shifted."
+      "description": "IANA timezone name such as Asia/Shanghai. Calendar conditions are evaluated in this timezone instead of the system timezone. ISO datetimes carry their own offset and are not shifted. Ambiguous local times (DST folds) resolve to the first occurrence; a one-shot ISO instant inside a DST gap is rejected."
     },
     "persistent": {
       "type": "boolean",

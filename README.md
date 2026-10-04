@@ -71,14 +71,14 @@ The table below is a quick reference; see `schemas/job.schema.json` for the comp
 | `onCalendar` | `string[]` or `null` | — | Each entry is a 5/6-field cron expression (strict cron parsing, recurring) or a full ISO instant (one-shot). |
 | `onActiveSec` | time span or `null` | — | Counted from the last activation, which is the most recent run's start moment. |
 | `onStartupSec` | time span or `null` | — | Counted from process start and fires once per process. |
-| `timeZone` | IANA timezone name | the system timezone | Overrides the system timezone for the job; applies only to calendar conditions. |
+| `timeZone` | IANA timezone name | the system timezone | Overrides the system timezone for the job; applies only to calendar conditions. Ambiguous local times (DST folds) resolve to the first occurrence; a one-shot ISO instant inside a DST gap is rejected. |
 | `persistent` | boolean | `false` | When `true`, if a trigger was due while the process was down or the job disabled, the plugin fires exactly one catch-up run after recovery, rebased to the current moment, and re-arms from the actual trigger moment. The missed interval is not persisted. |
 | `deferReactivation` | boolean | `false` | Applies only to jobs that have onCalendar conditions (on other jobs the value is accepted and ignored). When `true`, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When `false`, the phase advances at every due moment even while a run is in progress. |
 | `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
 | `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
 | `run` | object (required) | — | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, and `policy` are optional — full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above). |
 
-Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (≈ 30 days), `y`/`year(s)` (≈ 365 days) — case-sensitive (`m` is minutes, `M` is months) — where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) — a JSON number is never accepted.
+Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (≈ 30 days), `y`/`year(s)` (≈ 365 days) — case-sensitive (`m` is minutes, `M` is months) — where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) — a JSON number is never accepted. A span shorter than half a millisecond rounds to 0 ms and makes the job fire on every tick; prefer values of at least 1 ms.
 
 ### State file
 
@@ -88,7 +88,7 @@ The plugin persists each job's runtime state in `<job directory>/state/<jobId>.j
 {
   "schemaVersion": 1,
   "jobId": "example",
-  "lastActivationMs": 1727200000000,     // most recent run start moment (never run = process start)
+  "lastActivationMs": 1727200000000,     // most recent run start moment (null when never run; the onActiveSec base then falls back to process start)
   "lastTriggerMs": 1727100000000,        // job-level last on-calendar elapse (fire or overlap=skip consume; the phase anchor for the next elapse)
   "calendars": {                            // indexed by onCalendar value
     "0 9 * * 1-5": {
@@ -112,7 +112,7 @@ A run record inside `runs` has the following keys:
 | `trigger` | which condition fired: `scheduled` (a calendar condition), `monotonic` (`onActiveSec`), `startup` (`onStartupSec`), or `manual` (the `run` verb) |
 | `startedAt` / `finishedAt` | epoch milliseconds; the run's start and end moments |
 | `status` | `running` while the run is in progress, then `finished` or `failed` |
-| `cause` | present only on failure: `timeout`, `cancelled`, `interrupted`, `create_failed`, or `turn_error` |
+| `cause` | null for a finished run; the value is set only on failure: `timeout`, `cancelled`, `interrupted`, `create_failed`, or `turn_error` |
 | `durationMs` | the run's elapsed duration in milliseconds |
 | `summary` | a summary of the run, truncated to 2000 characters |
 | `error` | the error text when the run failed |
@@ -158,7 +158,7 @@ The package is written in TypeScript using only the erasable syntax subset (no e
 | `skill/` | the in-package skill |
 | `test/selftest.mjs` | the pure-logic selftest |
 | `test/smoke.mjs` | the framework-path smoke (tool schema validation, skill provider); needs the peer packages installed |
-| `test/schema-gate.mjs` | the ajv-based schema gate (both schemas compiled as draft 2020-12, positive/negative cases including the structural trigger rule); requires an ajv 8 build that supports draft 2020-12 and resolves it from the host toolchain rather than the package's own dependency tree |
+| `test/schema-gate.mjs` | the ajv-based schema gate (both schemas compiled as draft 2020-12, positive/negative cases including the structural trigger rule); uses an ajv 8 build that supports draft 2020-12, probed from the host toolchain (the `DSH_HOME` env, then the default host install location) rather than the package's own dependency tree |
 
 ### Plugin entry
 
