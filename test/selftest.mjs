@@ -472,6 +472,21 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('SKILL.md states the delete state-file wipe on the add row', skillMd.includes('which also removes its state file'))
   ok('README pins create-only on the add row and the state-file wipe on the delete row', readmeMd.includes('rejects if the id already exists') && readmeMd.includes('deletes the job file and its state file'))
   ok('SKILL.md troubleshooting maps the missing-id and already-exists failures', skillMd.includes('a separate tool argument of the verb') && skillMd.includes('already exists'))
+  // update = update only (the mirror of create-only add): the job file must exist, the
+  // whole spec is replaced in place after validation (an invalid spec leaves the existing
+  // file untouched), and the state file is never removed — run history, phase anchors and
+  // one-shot marks survive exactly like a manual edit of the job file (state is keyed by
+  // job id, independent of spec content). A changed trigger reschedules from the existing
+  // anchor (no phase reset); in-progress runs keep executing the spec they started with.
+  const upd = schedulerSrc.slice(schedulerSrc.indexOf('async updateJob('), schedulerSrc.indexOf('async deleteJob('))
+  ok('updateJob rejects an unknown id and points to add', upd.includes('not found; add creates it'))
+  ok('updateJob validates the spec before the file write', upd.includes('validateJob(spec') && upd.indexOf('validateJob(spec') < upd.indexOf('writeJsonFile'))
+  ok('updateJob never removes the state file', !upd.includes('unlinkStateFile') && !upd.includes('fsp.unlink'))
+  ok('the tool description states update is update-only and preserves the job state file', toolSrc.includes('update replaces the spec of an existing job in place') && toolSrc.includes('the job state file is preserved'))
+  ok('VERBS carries the update verb and the dispatch routes it to updateJob', toolSrc.includes("'reload', 'status', 'run', 'enable', 'disable', 'add', 'update', 'delete', 'cancel'") && toolSrc.includes("case 'update':") && toolSrc.includes('scheduler.updateJob(args?.id, args?.spec)'))
+  ok('README pins update-only and state preservation on the update row', readmeMd.includes('replaces the spec of an existing job in place') && readmeMd.includes("the job's state file is preserved"))
+  ok('SKILL.md states the update state preservation on the update row', skillMd.includes('the state file is preserved'))
+  ok('SKILL.md troubleshooting maps the update not-found failure and the rejected-job repair', skillMd.includes('no job file with that id') && skillMd.includes('promotes it out of rejected'))
 }
 {
   // tick/create decoupling:

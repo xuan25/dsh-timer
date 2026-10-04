@@ -1,4 +1,4 @@
-// dsh-timer timer tool: 8 verbs.
+// dsh-timer timer tool: 9 verbs.
 // The parameter schema is a strict declaration: the framework validates arguments against it
 // before execute and rejects type/enum/required violations with an `invalid arguments` error;
 // the validator then enforces the semantic rules (at least one trigger in effect, a
@@ -9,10 +9,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from './types.js'
 import type { TimerScheduler } from './scheduler.js'
 
-export const VERBS = ['reload', 'status', 'run', 'enable', 'disable', 'add', 'delete', 'cancel']
+export const VERBS = ['reload', 'status', 'run', 'enable', 'disable', 'add', 'update', 'delete', 'cancel']
 
 /**
- * Register the timer tool (8 verbs → TimerScheduler methods).
+ * Register the timer tool (9 verbs → TimerScheduler methods).
  * @param ctx cordis Context (the host must have loaded the dsh-tools service).
  * @param scheduler the plugin-side scheduler instance (a thrown error = verb failure; the framework relays error.message).
  * @returns framework effect disposer (unregisters the tool when the fiber is unloaded).
@@ -29,6 +29,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         'enable and disable switch the in-file enable field of an existing job. ' +
         'disable first cancels the in-progress runs of the job, matching systemd disable --now. ' +
         'add creates a new job (create-only: it fails if a job with the same id already exists; delete the job first to replace it, which also removes its state file). ' +
+        'update replaces the spec of an existing job in place (update-only: it fails if the job does not exist; add creates it); the job state file is preserved, so run history and scheduling anchors survive and a changed trigger reschedules from the existing anchor; in-progress runs keep executing the spec they started with. ' +
         'delete removes the job config and its state file. ' +
         'cancel cancels all in-progress runs of a job. ' +
         'Job spec fields: onCalendar, onActiveSec, onStartupSec, timeZone, persistent, deferReactivation, runtimeMaxSec, overlap, enable, run.',
@@ -37,13 +38,13 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         id: {
           type: 'string',
           description:
-            'Job id. It is required for run, enable, disable, add, delete, and cancel; omit it with status to get the overview of all jobs.',
+            'Job id. It is required for run, enable, disable, add, update, delete, and cancel; omit it with status to get the overview of all jobs.',
         },
         spec: {
           type: 'object',
           additionalProperties: true,
           description:
-            'Job spec for add. A valid spec needs at least one trigger in effect (onCalendar, onActiveSec, or onStartupSec; setting a trigger field to null means that trigger is explicitly not used) and a run object with a non-empty prompt. ' +
+            'Job spec for add and update. A valid spec needs at least one trigger in effect (onCalendar, onActiveSec, or onStartupSec; setting a trigger field to null means that trigger is explicitly not used) and a run object with a non-empty prompt. ' +
             'onCalendar is an array of cron expressions or ISO datetimes, or null to explicitly not use the calendar trigger. ' +
             'onActiveSec re-arms the job that long after its last run started, or null to explicitly not use the trigger. ' +
             'onStartupSec fires once that long after process start, or null to explicitly not use the trigger. ' +
@@ -152,6 +153,8 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
             return scheduler.setEnabled(args?.id, false)
           case 'add':
             return scheduler.addJob(args?.id, args?.spec)
+          case 'update':
+            return scheduler.updateJob(args?.id, args?.spec)
           case 'delete':
             return scheduler.deleteJob(args?.id)
           case 'cancel':

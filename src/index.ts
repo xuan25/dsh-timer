@@ -85,7 +85,7 @@ export class DshTimerPlugin extends Service {
     this.disposePrompt = ctx.systemPrompt.section({
       name: PLUGIN_NAME,
       order: 3000,
-      text: `Scheduled tasks are managed by the ${PLUGIN_NAME} plugin (timer tool, 8 verbs: reload/status/run/enable/disable/add/delete/cancel); see the ${PLUGIN_NAME} skill for task file fields and semantics.`,
+      text: `Scheduled tasks are managed by the ${PLUGIN_NAME} plugin (timer tool, 9 verbs: reload/status/run/enable/disable/add/update/delete/cancel); see the ${PLUGIN_NAME} skill for task file fields and semantics.`,
     })
   }
 

@@ -37,7 +37,7 @@ const RELOAD_DEBOUNCE_MS = 500
 /**
  * dsh-timer in-process scheduler: holds job models / in-progress runs / state persistence,
  * drives the tick and the fs.watch hot reload, and exposes the public methods behind the
- * 8 verbs.
+ * 9 verbs.
  * Constructed and started by DshTimerPlugin during apply; stopped on plugin dispose.
  */
 export class TimerScheduler {
@@ -1204,6 +1204,35 @@ export class TimerScheduler {
     await this.writeJsonFile(jsonFile, spec)
     const r = await this.rescan()
     return `added job ${idKey} (currently ${r.enabled} enabled, ${r.disabled} disabled)`
+  }
+
+  /**
+   * update = update only: the job file must exist (an unknown id is rejected — add creates
+   * it). The whole spec is replaced in place (no field-level patch), and the state file is
+   * preserved, exactly like a manual edit of the job file: run history, phase anchors and
+   * one-shot marks survive; a changed trigger definition reschedules from the existing
+   * anchor, and stale state fields of a changed trigger kind are ignored. In-progress runs
+   * keep executing the spec they started with; the new spec applies at the next trigger (an
+   * enabled→disabled flip in the new spec still cancels them at the rescan, like every other
+   * disabled write).
+   * Invalid spec → throw, existing file untouched (no last-good; whole-rejection semantics).
+   */
+  async updateJob(id: string | undefined, spec: unknown): Promise<string> {
+    const idKey = this.assertJobId(id)
+    const v = validateJob(spec, { nowMs: Date.now(), defaultTz: systemTimeZone() })
+    if (!v.ok) throw new Error(`spec invalid: ${v.errors.join('; ')} (existing job, if any, is untouched)`)
+    const jsonFile = this.jobFileOf(idKey)
+    let exists = false
+    try {
+      await fsp.access(jsonFile)
+      exists = true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+    if (!exists) throw new Error(`job ${idKey} not found; add creates it (timer add id=${idKey})`)
+    await this.writeJsonFile(jsonFile, spec)
+    const r = await this.rescan()
+    return `updated job ${idKey} (state preserved; currently ${r.enabled} enabled, ${r.disabled} disabled)`
   }
 
   /**

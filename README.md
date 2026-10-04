@@ -124,6 +124,7 @@ The plugin registers the `timer` tool, which exposes the following eight verbs, 
 | `run` | triggers the job manually once (allowed for disabled jobs too; unconditional start) |
 | `enable` / `disable` | flips the in-file `enable` field; `disable` = `disable --now` (cancels the job's in-progress runs first) |
 | `add` | creates a job; rejects if the id already exists (delete the job first to replace it) or if the spec is invalid |
+| `update` | replaces the spec of an existing job in place; rejects if the id is unknown (use `add`) or if the spec is invalid; the job's state file is preserved |
 | `delete` | deletes the job file and its state file (in-progress runs settle without writing state) |
 | `cancel` | cancels all in-progress runs of the job |
 

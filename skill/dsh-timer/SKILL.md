@@ -1,6 +1,6 @@
 ---
 name: dsh-timer
-description: "dsh-timer scheduled task plugin usage guide: 8 verbs, task file fields, examples, semantics highlights, and a troubleshooting decision tree."
+description: "dsh-timer scheduled task plugin usage guide: 9 verbs, task file fields, examples, semantics highlights, and a troubleshooting decision tree."
 whenToUse: when you need to create / inspect / enable-disable / manually trigger / delete scheduled tasks (dsh-timer timer tool)
 ---
 
@@ -8,7 +8,7 @@ whenToUse: when you need to create / inspect / enable-disable / manually trigger
 
 Scheduled tasks are managed by the dsh-timer plugin. A task = `<jobsDir>/<id>.json` (`jobsDir` is on the first line of the `timer` tool's status output); the id charset is `^[a-z0-9][a-z0-9-]{0,63}$`. Trigger due times are checked by a 30-second tick, so the worst-case reaction latency is about 30 s.
 
-## 1. The 8 verbs (timer tool)
+## 1. The 9 verbs (timer tool)
 
 | verb | args | description |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ Scheduled tasks are managed by the dsh-timer plugin. A task = `<jobsDir>/<id>.js
 | `enable` | `id` | set the in-file `enable` field to true (atomic read-modify-write, then an immediate rescan; the onStartupSec already-fired flag is preserved via in-process memory) |
 | `disable` | `id` | set the in-file `enable` field to false, cancelling all in-progress runs of the job first; the job's in-memory model and state file are kept, so re-enabling restores the schedule with its run history |
 | `add` | `id`, `spec` | create a job (create-only: a job with the same id already existing is rejected — to replace a job, `delete` it first, which also removes its state file): the spec is validated first (an invalid spec throws and no file is written), then `<id>.json` is written and the directory rescanned; the resulting enabled state is the new spec's `enable` field (absent = enabled) |
+| `update` | `id`, `spec` | replace the whole spec of an existing job in place (update-only: an unknown id is rejected — `add` creates it): the spec is validated first (an invalid spec throws and the existing file is untouched), then `<id>.json` is rewritten and the directory rescanned; the state file is preserved (run history, phase anchors, one-shot marks survive — same as a manual edit of the job file), a changed trigger reschedules from the existing anchor, and in-progress runs keep executing the spec they started with (an enabled→disabled flip in the new spec still cancels them at the rescan) |
 | `delete` | `id` | delete the config file and state file; in-progress runs settle but do not write state or recompute |
 | `cancel` | `id` | cancel all in-progress runs of the job (recorded as failed/cancelled); a no-op if none are in progress |
 
@@ -60,14 +61,17 @@ timer verb=add id=heartbeat spec='{"onActiveSec":"30min","run":{"prompt":"One-se
 # one-shot reminder (consumed after firing; status marks it "[fired (one-shot ISO instant)]")
 timer verb=add id=ny-2027 spec='{"onCalendar":["2027-01-01T00:00:00+08:00"],"run":{"prompt":"New Year reminder"}}'
 
-# replace an existing job = delete (also removes its state file: next-fire times and one-shot marks do not survive) + add
+# replace an existing job keeping its state (next-fire times / one-shot marks survive) = update
+timer verb=update id=heartbeat spec='{"onActiveSec":"1h","run":{"prompt":"One-sentence heartbeat"}}'
+
+# replace an existing job resetting its state = delete (also removes its state file: next-fire times and one-shot marks do not survive) + add
 timer verb=delete id=heartbeat
 timer verb=add id=heartbeat spec='{"onActiveSec":"1h","run":{"prompt":"One-sentence heartbeat"}}'
 ```
 
 ## 4. Management channels
 
-- Model side: the `timer` tool (the 8 verbs above); every task-file change must go through `add`/`enable`/`disable`/`delete` — never write task files directly with fs tools.
+- Model side: the `timer` tool (the 9 verbs above); every task-file change must go through `add`/`update`/`enable`/`disable`/`delete` — never write task files directly with fs tools.
 - Human side: `<jobsDir>/<id>.json` may also be edited by hand (saving triggers an automatic rescan after the 500 ms debounce; a broken file rejects that id with no last-good); deleting = remove the job file + its state file.
 
 ## 5. Semantics highlights
@@ -95,6 +99,7 @@ When status output looks wrong, check in this order:
 8. All trigger moments shifted together → suspected clock jump or system timezone change (see the clock & timezone bullet in §5); the plugin log records `clock rewound` / timezone-change entries.
 9. No jobs appear in the status overview at all → the plugin failed to start, or it started degraded: an unavailable designated job directory, or a profile that cannot be detected uniquely (or a host without the framework's harness-home service), fails plugin start; a missing resolved default directory means a degraded start (no jobs loaded, no state persisted) — check the plugin log.
 10. `add` reports `job id is required` → the `id` argument was omitted: `id` is a separate tool argument of the verb, not a field inside `spec` — retry with `id` set.
-11. `add` reports `already exists` → a job file with that id is present: to replace the job, `delete` it first (the delete also removes its state file — next-fire times and one-shot marks are lost), or use a different id.
+11. `add` reports `already exists` → a job file with that id is present: to replace the job, `delete` it first (the delete also removes its state file — next-fire times and one-shot marks are lost) or `update` it in place instead (its state file survives), or use a different id.
+12. `update` reports `not found` → no job file with that id: `add` creates it. A job sitting in [rejected] can be repaired with `update` (its file exists; a valid spec promotes it out of rejected) — `enable` on a rejected job stays blocked until the spec is valid.
 
 Evidence locations: the state file `<jobsDir>/state/<id>.json` (run records carry runId/sessionId — use the sessionId to look up the full run session record); the plugin log (prefix `dsh-timer`).
