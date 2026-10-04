@@ -9,7 +9,7 @@
  * moment (a fired trigger or a due trigger consumed by an overlap=skip — the recompute
  * anchor, systemd's one shared last trigger moment per unit); the operator derives any
  * missed interval from that moment, the next trigger time, and the current time.
- * State files may carry unknown extra keys (e.g. keys added by an older plugin version): they are
+ * State files may carry unknown extra keys: they are
  * tolerated on load (not corrupt), normalized away, and never written back.
  * Monotonic quantities (onActiveSec/onStartupSec) are not persisted: they are derived
  * from lastActivationMs and the process start time.
@@ -123,7 +123,7 @@ export function freshState(jobId: string): JobState {
  * Validated per field:
  * - top level: schemaVersion (=== STATE_SCHEMA_VERSION), jobId (string),
  *   lastActivationMs (number | null), lastTriggerMs (number | null; absent = no persisted
- *   anchor, tolerated for files written by older versions), calendars (plain object),
+ *   anchor, tolerated on load), calendars (plain object),
  *   runs (array);
  * - each calendars entry: value (string), kind (string | null), neverMatch (boolean),
  *   consumed (boolean), nextFireMs (number | null);
@@ -134,7 +134,7 @@ export function freshState(jobId: string): JobState {
  * In-flight records carry explicit nulls for cause / finishedAt / durationMs / summary;
  * settled records fill them on settlement. Records evicted by the FIFO before settlement
  * are re-appended with only { runId, ...patch }, so the optional fields may be absent.
- * Unknown extra keys (e.g. keys added by an older plugin version) are TOLERATED — not corrupt;
+ * Unknown extra keys are TOLERATED — not corrupt;
  * loadState normalizes them away.
  * @param s arbitrary value (a JSON.parse product).
  */
@@ -184,7 +184,7 @@ function stripUnknown(target: object, keys: Set<string>): void {
 
 export function normalizeState(state: JobState): void {
   stripUnknown(state, STATE_TOP_KEYS)
-  if (!Object.hasOwn(state, 'lastTriggerMs')) state.lastTriggerMs = null // legacy files without the job-level anchor: no anchor
+  if (!Object.hasOwn(state, 'lastTriggerMs')) state.lastTriggerMs = null // absent: no persisted anchor
   for (const cal of Object.values(state.calendars)) stripUnknown(cal, CALENDAR_KEYS)
   for (const run of state.runs) stripUnknown(run, RUN_KEYS)
 }
@@ -213,7 +213,7 @@ export async function loadState(file: string): Promise<StateLoadResult> {
   try {
     const s = JSON.parse(text) as JobState
     if (!checkStateShape(s)) return { state: null, corrupt: true, error: 'shape mismatch (full shape validation)' }
-    normalizeState(s) // unknown extra keys (e.g. keys added by an older plugin version): tolerate on load, strip, never write back
+    normalizeState(s) // unknown extra keys: tolerate on load, strip, never write back
     return { state: s, corrupt: false }
   } catch (err) {
     return { state: null, corrupt: true, error: errMsg(err) }

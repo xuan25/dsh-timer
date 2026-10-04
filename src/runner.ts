@@ -1,22 +1,15 @@
 // dsh-timer run executor: each run creates a fresh independent session (full inheritance
 // from the run session), fires the initial followup, and settles via whenIdle. The create
 // call is bounded by CREATE_TIMEOUT_MS (timeout → create_failed + orphan cancel/dispose),
-// so a stuck create always settles — the scheduled tick kicks the create off detached
-// (never awaits it), so the deadline bounds one create, not the scheduler.
+// so a stuck create always settles.
 // Note: agent.followup returns void (not a promise; verified against dsh-agent 0.1.5-rc.3) —
 // turn_error can only be detected by scanning the session events for turn/end; the edge case
 // of no turn/end and no pendingCause falls back to finished (a warn log is emitted here).
 // Event reading uses session.snapshotEvents() (the dsh-session public event-log API): the
 // snapshot observes every appended event, so settlement does not depend on a live event
 // subscription.
-// Agent plane of the run session: composed through the host's agent preset service via
-// the create call's setup hook — the framework's baseline composition alone carries only
-// the host's tool allowlist, so without the mount a run session sees no tools beyond it.
-// A job that NAMES a preset resolves it strictly (resolveMountable; unresolvable/broken
-// preset or absent service → create_failed: a job file is declarative config, a typo'd
-// preset id must not silently degrade). A job WITHOUT a preset mounts the deployment
-// default preset, degrading to the baseline composition (a warn) when the host provides
-// no service or no usable default.
+// Agent plane of the run session: mounted through the host's agent preset service via the
+// create call's setup hook (preset resolution semantics: see the create-site comment).
 // Run-session lifecycle: a run session lives exactly one run and is disposed by the
 // plugin after settlement (the on-disk session log is the audit trail). The plugin keeps
 // no retention mechanism and does not bend this behavior to compensate for framework
@@ -33,15 +26,11 @@ import { SUMMARY_LIMIT, type StateRun } from './state.js'
 import { PLUGIN_NAME, errMsg } from './util.js'
 import type { Context, JobModel, Logger, RunOutcome, RunRecord, RunTrigger } from './types.js'
 
-/** Deployment default root for per-job run working directories; the job schema run.cwd description mirrors this value. */
-export const DEFAULT_RUN_CWD_ROOT = '/workspace/timer/runs'
-
 /**
  * Bounded deadline for `ctx.agents.create`: a create that does not resolve within
  * this window settles the run as failed/create_failed ("agent create timed out after Nms") and
  * the late-resolving agent is cancelled + disposed (orphan protection). This is the only
- * escape for a hung create; it bounds one create, never the scheduler (the tick kicks the
- * create off detached and never awaits it).
+ * escape for a hung create; it bounds one create, never the scheduler.
  */
 export const CREATE_TIMEOUT_MS = 300_000
 
@@ -278,30 +267,23 @@ export type StartRunResult = { ok: true } | { ok: false; error: string }
 /**
  * Start one run. The run is registered in state before the session is created (lastActivation =
  * run start moment, persisted immediately, so a create failure cannot open a double-fire window
- * for onActiveSec); create failure → failed/create_failed (the fire is already consumed:
- * cron re-arms from the actual trigger moment, ISO is treated as consumed → no retry storm).
- * Run-cwd creation failure fails the run immediately the same way (no session is created).
- * Agent preset resolution is part of the same create-failure surface: an
- * unavailable job-named preset — or the host's absent agent-presets service — fails the
- * run create_failed before any session is created.
- * The create call is bounded by CREATE_TIMEOUT_MS: a create that does not resolve in time
- * settles the run as failed/create_failed ("agent create timed out after Nms"), and the
- * late-resolving agent is cancelled + disposed (orphan protection), so a stuck create
- * always settles — the scheduled tick kicks startRun off detached (fire-and-forget; it
- * never awaits the create), while the manual path awaits the result. A create that
- * REJECTS (missing agent
- * factory, or the factory's own setup failure) settles the run identically ("agent create
- * failed: <reason>"): the create API is async, so its failure surface is a promise
- * rejection — caught in the race's onRejected branch, exactly like the timeout. startRun
- * itself never rejects for a create failure; every failure mode returns { ok: false }
- * through failCreate.
+ * for onActiveSec); create failure → failed/create_failed (the fire bookkeeping is the
+ * scheduler's — bookkeepCreateFailed treats the fire as happened, so no retry storm).
+ * Run-cwd creation failure fails the run immediately the same way (no session is created);
+ * agent preset resolution is part of the same create-failure surface (see the create-site
+ * comment).
+ * The create call is bounded by CREATE_TIMEOUT_MS (see the constant): a timeout — and a
+ * create that REJECTS (missing agent factory, or the factory's own setup failure, caught
+ * in the race's onRejected branch) — settles the run identically through failCreate;
+ * startRun itself never rejects for a create failure, every failure mode returning
+ * { ok: false }.
  * A stop requested while the session is being created (handle not yet assigned, the tick's
  * cancel was a no-op) is delivered to the just-created agent so the settlement records a
  * truthful failed/cancelled.
  */
 export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }: StartRunParams): Promise<StartRunResult> {
   const spec = model.spec.run
-  const cwd = spec.cwd || `${DEFAULT_RUN_CWD_ROOT}/${model.id}/`
+  const cwd = spec.cwd ?? null
 
   const record0: StateRun = {
     runId: run.runId,
@@ -329,6 +311,13 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }
       error,
     })
     return { ok: false, error }
+  }
+
+  if (cwd === null) {
+    // A job whose spec sets no run.cwd cannot get a run session working directory:
+    // settle as create_failed with the actionable remedy (mirrors the privilege check's
+    // undetermined-run-root fail-closed).
+    return failCreate(`job ${model.id} has no run cwd: set run.cwd in the job spec`)
   }
 
   try {
@@ -382,8 +371,8 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }
       logger.warn(`job=${model.id} no usable default agent preset (${errMsg(err)}); continuing with the baseline composition`)
     }
   }
-  // SessionId is a type-level brand (Branded<'SessionId'>); at runtime it is just a string,
-  // matching the JS version's behavior. ctx.agents.create is async: every create failure
+  // SessionId is a type-level brand (Branded<'SessionId'>); at runtime it is just a string.
+  // ctx.agents.create is async: every create failure
   // (missing factory, setup failure) surfaces as a rejection of the returned promise and can
   // never throw synchronously — so no try/catch wraps the call. The rejection is settled in
   // the race's onRejected branch below (failCreate, exactly like a timeout).

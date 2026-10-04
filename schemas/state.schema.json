@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "dsh-timer state file format contract. The plugin is the sole writer of these files; they are read-only for operators. The structural keywords below hold for the shape the plugin writes; on load the plugin runs a full-shape validation, and unknown extra keys (such as the legacy `missed` field and the legacy per-condition `lastTriggerMs`) are tolerated and never written back, and run records evicted from the FIFO before settlement may omit optional fields.",
+  "$comment": "dsh-timer state file format contract. The plugin is the sole writer of these files; they are read-only for operators. The structural keywords below hold for the shape the plugin writes; on load the plugin runs a full-shape validation, and unknown extra keys, if any, are tolerated and never written back, and run records evicted from the FIFO before settlement may omit optional fields.",
   "title": "dsh-timer state file",
   "description": "Runtime state of one scheduled job. Each job has one state file named <jobId>.json under the state subdirectory of the plugin jobsDir (the state directory is excluded from the directory watch). The in-memory state is authoritative and the file is a best-effort mirror: a failed write does not block scheduling, and a missing file means the job has no persisted state yet. The plugin creates the file when the job is first loaded.",
   "type": "object",
@@ -20,7 +20,7 @@
     },
     "lastTriggerMs": {
       "type": ["number", "null"],
-      "description": "Epoch milliseconds of the job's last on-calendar elapse moment (a fired trigger, or a due trigger consumed in place by an overlap=skip — the recompute anchor, one shared moment for all of the job's calendar conditions). Null when no on-calendar elapse has been persisted yet; absent in files written by older versions (tolerated on load, treated as no anchor). Never advanced by monotonic or manual fires."
+      "description": "Epoch milliseconds of the job's last on-calendar elapse moment (a fired trigger, or a due trigger consumed in place by an overlap=skip — the recompute anchor, one shared moment for all of the job's calendar conditions). Null when no on-calendar elapse has been persisted yet; absent (tolerated on load, treated as no anchor). Never advanced by monotonic or manual fires."
     },
     "calendars": {
       "type": "object",

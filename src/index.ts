@@ -4,7 +4,7 @@
 // Plugin form = cordis class plugin (Service subclass): `new DshTimerPlugin(ctx, validatedConfig)`.
 // The instance `async *[Service.init]()` carries the lifecycle: yield the disposer
 // (scheduler.stop + the three registration unregisters), then await scheduler.start()
-// (a failed start = plugin apply failure, matching the JS version's apply-throws semantics).
+// (a failed start = plugin apply failure).
 import Schema from '@deepseek-ai/schemastery'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { PLUGIN_NAME, resolveJobsDir } from './util.js'
@@ -25,9 +25,9 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Plugin configuration (the schemastery-validated shape; jobsDir is optional). */
+/** Plugin configuration (the schemastery-validated shape; the field is optional). */
 export interface DshTimerConfig {
-  /** Job directory (optional); defaults try env DSH_TIMER_JOBS_DIR, then <profileDir>/timers (profile via the install-root walk-up or the harness-home dsh-profile-* discovery, see resolveJobsDir). */
+  /** Job directory (optional); defaults try env DSH_TIMER_JOBS_DIR, then <profileDir>/timers (profile directory via the install-root walk-up or the harness-home dsh-profile-* discovery, see resolveJobsDir). */
   jobsDir?: string
 }
 
@@ -67,7 +67,7 @@ export class DshTimerPlugin extends Service {
   static name = PLUGIN_NAME
   static readonly inject = ['agents', 'timer', 'tools', 'skills', 'systemPrompt', 'dshHomePath']
   static readonly Config = Schema.object({
-    jobsDir: Schema.string().description('Job directory (optional); defaults try env DSH_TIMER_JOBS_DIR, then <profileDir>/timers (profile via the install-root walk-up or the harness-home dsh-profile-* discovery)'),
+    jobsDir: Schema.string().description('Job directory (optional); defaults try env DSH_TIMER_JOBS_DIR, then <profileDir>/timers (profile directory via the install-root walk-up or the harness-home dsh-profile-* discovery)'),
   })
 
   private readonly scheduler: TimerScheduler

@@ -147,9 +147,10 @@ export function packageRoot(): string {
 }
 
 /**
- * Resolve the install root: walk up from the package directory until a directory named
- * 'node_modules' is found; its parent is the install root.
- * Bounded at 32 levels as a cycle guard.
+ * Resolve the install root (in a dsh profile install, the profile directory — the
+ * directory that contains the plugin's node_modules tree): walk up from the package
+ * directory until a directory named 'node_modules' is found; its parent is the install
+ * root. Bounded at 32 levels as a cycle guard.
  * @param pkgDir absolute package root path.
  * @returns absolute install root path; null when no node_modules ancestor exists (e.g. a bare dev checkout).
  */
@@ -277,7 +278,7 @@ export function resolveJobsDir(pluginConfig: { jobsDir?: string }, logger: { inf
       return c.value
     } catch (err) {
       const msg = errMsg(err)
-      throw new Error(`${PLUGIN_NAME} cannot initialize jobsDir (${c.source} = ${c.value}): ${msg} — an explicitly configured jobsDir is unavailable; check the directory and permissions`)
+      throw new Error(`${PLUGIN_NAME} cannot initialize jobsDir (${c.source} = ${c.value}): ${msg} — check the directory and permissions`)
     }
   }
   let profileDir = getProfileDir(packageRoot())
@@ -301,9 +302,7 @@ export function resolveJobsDir(pluginConfig: { jobsDir?: string }, logger: { inf
       return value
     }
   }
-  // All candidates exhausted: no explicit value, no install root, and the harness-home
-  // discovery absent or ambiguous (zero or multiple dsh-profile-* profiles under the
-  // harness home; a multi-profile home cannot be auto-detected).
+  // All candidates exhausted → fail closed; the detail below names the missing channel.
   const detail = dshHomePath
     ? 'no install root was found and harness-home profile discovery is ambiguous (zero or multiple dsh-profile-* profiles under the harness home)'
     : 'no install root was found and the host does not provide the dshHomePath service (profile discovery unavailable)'

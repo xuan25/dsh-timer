@@ -24,7 +24,7 @@ export type Policy = 'read-only' | 'workspace-write' | 'danger-full-access'
 export interface RunSpec {
   /** Required: body of the first user message of the run session (wrapped by the plugin into a scheduled-run instruction); a whitespace-only prompt is rejected. */
   prompt: string
-  /** Working directory of the run session; default `/workspace/timer/runs/<jobId>/`; `null` = explicitly unset (same as omitting the field). */
+  /** Working directory of the run session. Omitted or `null` on `add` inherits the creating session's workspace itself (`<session-cwd>`) and the inherited value is persisted into the job file; a creating session without a cwd must set an explicit `cwd` or the `add` is refused. On `update`, omitted or `null` keeps the job's existing run cwd. */
   cwd?: string | null
   /** Session preset (CreateAgentOptions.meta.agentPreset); `null` = explicitly unset. */
   preset?: string | null

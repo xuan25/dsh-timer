@@ -1,7 +1,6 @@
 // dsh-timer selftest: pure-logic modules + croner probe vectors + runner settlement
 // behavior probe (stub session, real dsh-session event envelope; no live framework services).
 // Run: node test/selftest.mjs. All green = exit code 0.
-import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -293,15 +292,42 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   }
 }
 {
-  // the runner's default run-cwd root is a fixed deployment
-  // constant (types.ts comment, job.schema.json run.cwd description).
-  // Bind the code literal to the schema description so the artifact sites cannot drift apart.
+  // the plugin ships no host-absolute run path and no directory layout of its own: a job's
+  // run root is either the creating session's workspace itself (inherited at add time,
+  // persisted into the job file) or the spec's explicit run.cwd — there is no
+  // deployment-declared default run root and no per-job subpath. Bind the code shape and
+  // the schema description so the artifact sites cannot drift apart.
   const runnerSrc = readFileSync(path.join(PKG, 'src/runner.ts'), 'utf8')
   const cwdDesc = JSON.parse(readFileSync(path.join(PKG, 'schemas', 'job.schema.json'), 'utf8')).properties.run.properties.cwd.description
-  const rootMatch = runnerSrc.match(/DEFAULT_RUN_CWD_ROOT = '([^']+)'/)
-  ok('contract sync: runner declares DEFAULT_RUN_CWD_ROOT', rootMatch !== null)
-  ok('contract sync: runner default run-cwd root matches the job schema description (trailing slash included)', rootMatch !== null && cwdDesc.includes(`${rootMatch[1]}/<id>/`))
-  ok('contract sync: runner derives the default run cwd from DEFAULT_RUN_CWD_ROOT', runnerSrc.includes('`${DEFAULT_RUN_CWD_ROOT}/${model.id}/`'))
+  ok('contract sync: the schema says inheritance lands on the session workspace itself, with no subpath', cwdDesc.includes('<session-cwd>') && !cwdDesc.includes('timer/runs'))
+  ok('contract sync: runner takes the run cwd from the spec only (no derivation of its own)', runnerSrc.includes('const cwd = spec.cwd'))
+  ok('contract sync: runner fails the run create_failed when the spec sets no run cwd', runnerSrc.includes('has no run cwd: set run.cwd in the job spec'))
+}
+{
+  // decoupling guard: no source file carries a host-absolute run path (the fixed
+  // deployment constant is gone; every run root is a caller session fact or an explicit
+  // job value), and neither a deployment-declared default run root (the config field, the
+  // env variable, and the derivation are all removed: an undetermined run root fails
+  // closed instead) nor a per-job run-directory subpath exists on the artifact surface
+  // (inheritance lands on the creating session's workspace itself).
+  const srcFiles = readdirSync(path.join(PKG, 'src')).filter((f) => f.endsWith('.ts'))
+  // The token is assembled from parts: the hygiene guard below scans this file for the
+  // contiguous host-path literal, so the guard's own needle must not spell it out.
+  const hostPathToken = '/' + 'workspace' + '/'
+  const withHostPath = srcFiles.filter((f) => readFileSync(path.join(PKG, 'src', f), 'utf8').includes(hostPathToken))
+  ok('decoupling: no src file carries a host-absolute run path', withHostPath.length === 0, withHostPath.join(','))
+  const rootToken = 'defaultRunCwdRoot'
+  const subToken = 'DEFAULT_RUN_ROOT_SUBDIR'
+  const rootHit = []
+  for (const f of srcFiles) {
+    const src = readFileSync(path.join(PKG, 'src', f), 'utf8')
+    if (src.includes(rootToken) || src.includes(subToken)) rootHit.push(f)
+  }
+  for (const f of ['README.md', path.join('schemas', 'job.schema.json'), path.join('skill', 'dsh-timer', 'SKILL.md')]) {
+    const src = readFileSync(path.join(PKG, f), 'utf8')
+    if (src.includes(rootToken) || src.includes('DSH_TIMER_RUN_CWD_ROOT') || src.includes('timer/runs')) rootHit.push(f)
+  }
+  ok('decoupling: no deployment-declared default run root or per-job subpath on the artifact surface', rootHit.length === 0, rootHit.join(','))
 }
 {
   // source-level guards for the run executor's
@@ -366,8 +392,6 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   // captured at creation); a job deleted + recreated under the same id never inherits a stale
   // generation's in-flight runs in overlap / status / cancel / disable (source guard; the
   // behavior is framework-gated and covered by host-side acceptance).
-  // The job schema's run.cwd description carries the trailing slash that the runtime's
-  // `${root}/<id>/` template emits (bound by the guard above).
   const stateSrc = readFileSync(path.join(PKG, 'src/state.ts'), 'utf8')
   const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
   ok('contract sync: loadState normalizes away all unknown extra keys', stateSrc.includes('export function normalizeState(') && stateSrc.includes("['schemaVersion', 'jobId', 'lastActivationMs', 'lastTriggerMs', 'calendars', 'runs']") && stateSrc.includes("['value', 'kind', 'neverMatch', 'consumed', 'nextFireMs']") && stateSrc.includes("['runId', 'sessionId', 'trigger', 'startedAt', 'finishedAt', 'durationMs', 'status', 'cause', 'summary', 'error']") && /normalizeState\(s\)/.test(stateSrc) && !stateSrc.includes('delete (s as { missed?: unknown }).missed'))
@@ -379,8 +403,8 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
       writeFileSync(file, JSON.stringify({
         schemaVersion: 1, jobId: 'probe', lastActivationMs: null,
         missed: 3, operatorNote: 'foreign top-level key',
-        // lastTriggerMs inside a calendar entry is the legacy per-condition anchor: a
-        // tolerated foreign key (the anchor moved to job level), stripped on load
+        // lastTriggerMs inside a calendar entry is a tolerated foreign key (the anchor is
+        // job-level), stripped on load
         calendars: { '0 9 * * *': { value: '0 9 * * *', kind: 'cron', neverMatch: false, consumed: false, lastTriggerMs: null, nextFireMs: null, stale: true } },
         runs: [{ runId: 'r1', startedAt: 1, status: 'finished', cause: null, followedBy: 'foreign run key' }],
       }, null, 2) + '\n', { flag: 'w' })
@@ -483,7 +507,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('updateJob validates the spec before the file write', upd.includes('validateJob(spec') && upd.indexOf('validateJob(spec') < upd.indexOf('writeJsonFile'))
   ok('updateJob never removes the state file', !upd.includes('unlinkStateFile') && !upd.includes('fsp.unlink'))
   ok('the tool description states update is update-only and preserves the job state file', toolSrc.includes('update replaces the spec of an existing job in place') && toolSrc.includes('the job state file is preserved'))
-  ok('VERBS carries the update verb and the dispatch routes it to updateJob', toolSrc.includes("'reload', 'status', 'run', 'enable', 'disable', 'add', 'update', 'delete', 'cancel'") && toolSrc.includes("case 'update':") && toolSrc.includes('scheduler.updateJob(args?.id, args?.spec)'))
+  ok('VERBS carries the update verb and the dispatch routes it to updateJob', toolSrc.includes("'reload', 'status', 'run', 'enable', 'disable', 'add', 'update', 'delete', 'cancel'") && toolSrc.includes("case 'update':") && toolSrc.includes('scheduler.updateJob(args?.id, args?.spec, caller)'))
   ok('README pins update-only and state preservation on the update row', readmeMd.includes('replaces the spec of an existing job in place') && readmeMd.includes("the job's state file is preserved"))
   ok('SKILL.md states the update state preservation on the update row', skillMd.includes('the state file is preserved'))
   ok('SKILL.md troubleshooting maps the update not-found failure and the rejected-job repair', skillMd.includes('no job file with that id') && skillMd.includes('promotes it out of rejected'))
@@ -1356,6 +1380,311 @@ function naiveIsoCond(value, tz, consumed = false) {
   }
 }
 
+{ // privilege checks (policy monotonicity + the run-root scope rule + approval-channel
+  // escalation + the run.cwd caller-root rule): source contract pins for the wiring, then
+  // behavioral cases driving the real scheduler against synthetic callers (explicit caller
+  // contexts, mock approval seams; the tool handler derives these from the execution
+  // context at call time).
+  const { TimerScheduler } = await import(path.join(PKG, 'lib/scheduler.js'))
+  const quietLg = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+  const privToolSrc = readFileSync(path.join(PKG, 'src/tool.ts'), 'utf8')
+  const privSrc = readFileSync(path.join(PKG, 'src/privilege.ts'), 'utf8')
+  const privSchedSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
+  ok('tool.ts derives the caller context from the execution context', privToolSrc.includes('async execute(args, exec)') && privToolSrc.includes('deriveCallerContext(ctx, exec)'))
+  ok('tool.ts reads the approval service through the non-strict ctx.get accessor', privToolSrc.includes("ctx.get('approval')") && privToolSrc.includes('.overrideOf('))
+  ok('tool.ts reads the sandbox-policy service through the non-strict ctx.get accessor (an undeclared property read throws in a runtime fiber)', privToolSrc.includes("ctx.get('sandboxPolicy')") && !privToolSrc.includes('.sandboxPolicy'))
+  ok('tool.ts threads the caller through the seven job-acting verbs', ['addJob(args?.id, args?.spec, caller)', 'updateJob(args?.id, args?.spec, caller)', 'manualRun(args?.id, caller)', 'deleteJob(args?.id, caller)', 'cancelJob(args?.id, caller)'].every((s) => privToolSrc.includes(s)) && privToolSrc.includes('setEnabled(args?.id, true, caller)') && privToolSrc.includes('setEnabled(args?.id, false, caller)'))
+  ok('privilege.ts declares the monotone policy rank table', privSrc.includes("'read-only': 0") && privSrc.includes("'workspace-write': 1") && privSrc.includes("'danger-full-access': 2"))
+  ok('privilege.ts fails closed on every non-granted approval outcome', privSrc.includes("'allowed-once'") && privSrc.includes('the user rejected the approval') && privSrc.includes('the approval request was cancelled') && privSrc.includes('no approval channel is available') && privSrc.includes('no agent context to route approval through'))
+  ok('privilege.ts canonicalizes against the deepest existing prefix (symlink-proof)', privSrc.includes('realpathSync') && privSrc.includes('existsSync'))
+  ok('privilege.ts exempts a full-access caller from the cwd rule', privSrc.includes(`caller.policy !== 'danger-full-access'`))
+  ok('scheduler.ts runs the privilege check on the five single-verb literals', ['verb: \'add\'', 'verb: \'update\'', 'verb: \'run\'', 'verb: \'delete\'', 'verb: \'cancel\''].every((s) => privSchedSrc.includes(s)))
+  ok('scheduler.ts gates enable and disable in one ternary check (both directions)', privSchedSrc.includes("verb: enabled ? 'enable' : 'disable'"))
+  ok('privilege.ts exempts a full-access caller from both axes', privSrc.includes(`caller.policy === 'danger-full-access' ? { kind: 'in' }`))
+  ok('scheduler.ts treats an unparseable on-disk spec as the top level (fail closed)', privSchedSrc.includes('assume the top level'))
+
+  const seam = (outcome = 'allowed-once') => {
+    const calls = []
+    return { calls, request: async (req) => { calls.push(req); return outcome } }
+  }
+  const callerOf = (o = {}) => ({
+    hasPolicyWorld: o.world !== false,
+    policy: o.policy ?? 'workspace-write',
+    defaultMode: o.world === false ? null : (o.defaultMode ?? 'workspace-write'),
+    cwd: o.cwd ?? null,
+    agent: o.agent === false ? null : { session: { header: { cwd: o.cwd ?? undefined } } },
+    approval: o.approval ?? null,
+  })
+  const specOf = (o = {}) => {
+    const { enable, prompt, ...run } = o
+    const s = { onActiveSec: '1h', run: { prompt: 'priv probe', ...run } }
+    if (enable !== undefined) s.enable = enable
+    if (prompt !== undefined) s.run.prompt = prompt
+    return s
+  }
+  const errOf = async (p) => { try { await p } catch (err) { return err.message } return null }
+
+  const base = mkdtempSync(path.join(tmpdir(), 'dt-priv-'))
+  try {
+    const root = path.join(base, 'ws') // the synthetic caller session's cwd
+    const outsideDir = path.join(base, 'outside') // a sibling of the caller root
+    const jobsDir = path.join(base, 'jobs')
+    mkdirSync(root, { recursive: true })
+    mkdirSync(outsideDir)
+    mkdirSync(jobsDir)
+    const emptyWorld = { agents: undefined } // no sandbox-policy service, no approval service
+    let sched = new TimerScheduler({ ctx: emptyWorld, logger: quietLg, jobsDir })
+    const wsCaller = callerOf({ cwd: root })
+    const faCaller = callerOf({ policy: 'danger-full-access', cwd: root })
+
+    // B1: a policy gap with no approval channel fails closed; no file effect
+    const e1 = await errOf(sched.addJob('p1', specOf({ policy: 'danger-full-access' }), wsCaller))
+    ok('add: gap with no approval channel is denied', e1 !== null && e1.includes('no approval channel is available') && e1.includes(`runs at policy 'danger-full-access', above this session's policy 'workspace-write'`))
+    ok('add: denied escalation leaves no job file', !existsSync(path.join(jobsDir, 'p1.json')))
+    // B2: a rejected approval fails closed; no file effect
+    const e2 = await errOf(sched.addJob('p2', specOf({ policy: 'danger-full-access' }), callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('add: a rejected approval is denied', e2 !== null && e2.includes('the user rejected the approval'))
+    ok('add: a rejected approval leaves no job file', !existsSync(path.join(jobsDir, 'p2.json')))
+    // B3: an approved escalation proceeds; the question names the job, both levels, and the verb
+    const okSeam = seam('allowed-once')
+    const r3 = await sched.addJob('p3', specOf({ policy: 'danger-full-access' }), callerOf({ cwd: root, approval: okSeam }))
+    ok('add: an approved escalation creates the job', typeof r3 === 'string' && r3.startsWith('added job p3'))
+    ok('add: the approval question routes through the timer tool with a human-facing reason', okSeam.calls.length === 1 && okSeam.calls[0].toolName === 'timer' && okSeam.calls[0].displayReason.en.includes('p3') && okSeam.calls[0].displayReason.en.includes('danger-full-access') && okSeam.calls[0].reason.includes('timer add'))
+    // B4: an omitted policy resolves to the deployment default — the gap still counts
+    const e4 = await errOf(sched.addJob('p4', specOf({}), callerOf({ policy: 'read-only', cwd: root, approval: seam('rejected') })))
+    ok('add: an omitted policy (deployment default) still counts as the job level', e4 !== null && e4.includes(`above this session's policy 'read-only'`))
+    // B5: an explicit run.cwd outside the caller's own cwd is denied (no gap, no escalation)
+    const e5 = await errOf(sched.addJob('p5', specOf({ cwd: outsideDir }), wsCaller))
+    ok('add: a run cwd outside the session root is denied', e5 !== null && e5.includes(`is outside this session's workspace root '${root}'`))
+    ok('add: a denied run cwd leaves no job file', !existsSync(path.join(jobsDir, 'p5.json')))
+    // B6: a run cwd at or under the caller's own cwd is accepted
+    await sched.addJob('p6', specOf({ cwd: path.join(root, 'sub') }), wsCaller)
+    ok('add: a run cwd under the session root is accepted', existsSync(path.join(jobsDir, 'p6.json')))
+    // B7: a full-access caller is exempt from both the gap and the cwd rule
+    await sched.addJob('p7', specOf({ policy: 'danger-full-access', cwd: outsideDir }), faCaller)
+    ok('add: a full-access caller may set any policy and any run cwd', existsSync(path.join(jobsDir, 'p7.json')))
+    // B8: a symlink under the caller's root pointing outside it does not bypass the rule
+    const { symlinkSync } = await import('node:fs')
+    symlinkSync(outsideDir, path.join(root, 'link'))
+    const e8 = await errOf(sched.addJob('p8', specOf({ cwd: path.join(root, 'link', 'x') }), wsCaller))
+    ok('add: a symlinked run cwd escaping the session root is denied', e8 !== null && e8.includes(`is outside this session's workspace root`))
+    // B9: updating a higher-level job needs the approval even when the new spec is lower
+    await sched.addJob('p9', specOf({ policy: 'danger-full-access' }), faCaller)
+    const before9 = readFileSync(path.join(jobsDir, 'p9.json'), 'utf8')
+    const e9 = await errOf(sched.updateJob('p9', specOf({ prompt: 'touched', policy: 'workspace-write' }), callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('update: a lower-level caller may not touch a higher-level job (rejection)', e9 !== null && e9.includes('the user rejected the approval'))
+    ok('update: a denied update leaves the job file untouched', readFileSync(path.join(jobsDir, 'p9.json'), 'utf8') === before9)
+    // B10: an approved update proceeds
+    await sched.updateJob('p9', specOf({ prompt: 'touched' }), callerOf({ cwd: root, approval: seam('allowed-once') }))
+    ok('update: an approved update replaces the spec in place', readFileSync(path.join(jobsDir, 'p9.json'), 'utf8').includes('touched'))
+    // B11: disable is gated like every other job-acting verb: a job above the
+    // caller's level and/or outside its run-root scope routes through the approval
+    // channel (one approval clears both axes); enable of a higher-level job is
+    // likewise gated
+    await sched.addJob('p11', specOf({ policy: 'danger-full-access', enable: true }), faCaller)
+    const before11 = readFileSync(path.join(jobsDir, 'p11.json'), 'utf8')
+    const e11a = await errOf(sched.setEnabled('p11', false, callerOf({ policy: 'read-only', approval: seam('rejected') })))
+    ok('disable: a higher-level job outside the caller scope routes through the approval channel', e11a !== null && e11a.includes('the user rejected the approval') && e11a.includes(`runs at policy 'danger-full-access', above this session's policy 'read-only'`) && e11a.includes('no cwd to anchor'))
+    ok('disable: a denied disable leaves the job file untouched', readFileSync(path.join(jobsDir, 'p11.json'), 'utf8') === before11)
+    const b11Seam = seam('allowed-once')
+    const r11 = await sched.setEnabled('p11', false, callerOf({ policy: 'read-only', approval: b11Seam }))
+    ok('disable: one approval clears the level gap and the scope breach together', typeof r11 === 'string' && r11.startsWith('disabled job p11') && b11Seam.calls.length === 1)
+    const e11b = await errOf(sched.setEnabled('p11', true, callerOf({ policy: 'read-only', approval: seam('rejected') })))
+    ok('enable: a higher-level job routes through the approval channel', e11b !== null && e11b.includes('the user rejected the approval'))
+    await sched.setEnabled('p11', true, callerOf({ policy: 'read-only', approval: seam('allowed-once') }))
+    ok('enable: an approved enable proceeds', existsSync(path.join(jobsDir, 'p11.json')))
+    // B12: manually running a higher-level job routes through the approval channel
+    await sched.addJob('p12', specOf({ policy: 'danger-full-access', cwd: path.join(root, 'runs12') }), faCaller)
+    const e12 = await errOf(sched.manualRun('p12', callerOf({ policy: 'read-only', approval: seam('rejected') })))
+    ok('run: a higher-level job routes through the approval channel', e12 !== null && e12.includes('the user rejected the approval'))
+    // B13: an approved manual run starts the run session (full runner path, stub agent)
+    const stubAgent = { session: { snapshotEvents: () => [] }, cancel: () => {}, followup: () => Promise.resolve(undefined), whenIdle: () => Promise.resolve(undefined) }
+    let createdOpts = null
+    const runSeam = seam('allowed-once')
+    const runWorld = {
+      sandboxPolicy: { defaultMode: 'workspace-write', overrideOf: () => undefined },
+      get: (name) => (name === 'approval' ? runSeam : undefined),
+      agents: { create: async (opts) => { createdOpts = opts; return { agent: stubAgent, dispose: async () => {} } } },
+      timeout: () => () => {},
+    }
+    sched = new TimerScheduler({ ctx: runWorld, logger: quietLg, jobsDir })
+    await sched.reload() // fresh instance: load the job files into its registries first
+    const r13 = await sched.manualRun('p12', callerOf({ policy: 'read-only', approval: runSeam }))
+    ok('run: an approved manual run starts at the job spec level', typeof r13 === 'string' && r13.startsWith('started run') && runSeam.calls.length === 1)
+    ok('run: the started run session carries the spec cwd', createdOpts !== null && createdOpts.meta.cwd === path.join(root, 'runs12'))
+    // B14: deleting a higher-level job routes through the approval channel
+    await sched.addJob('p14', specOf({ policy: 'workspace-write' }), callerOf({ policy: 'danger-full-access', cwd: root }))
+    const before14 = readFileSync(path.join(jobsDir, 'p14.json'), 'utf8')
+    const e14 = await errOf(sched.deleteJob('p14', callerOf({ policy: 'read-only', approval: seam('rejected') })))
+    ok('delete: a higher-level job routes through the approval channel', e14 !== null && e14.includes('the user rejected the approval'))
+    ok('delete: a denied delete leaves the job file untouched', existsSync(path.join(jobsDir, 'p14.json')) && readFileSync(path.join(jobsDir, 'p14.json'), 'utf8') === before14)
+    await sched.deleteJob('p14', callerOf({ policy: 'read-only', approval: seam('allowed-once') }))
+    ok('delete: an approved delete removes config and state', !existsSync(path.join(jobsDir, 'p14.json')) && !existsSync(path.join(jobsDir, 'state', 'p14.json')))
+    // B15: a host without the policy service has nothing to enforce — the checks skip
+    const bareWorld = {}
+    const bareCaller = callerOf({ world: false, policy: null, approval: null })
+    await new TimerScheduler({ ctx: bareWorld, logger: quietLg, jobsDir }).addJob('p15', specOf({ policy: 'danger-full-access', cwd: outsideDir }), bareCaller)
+    ok('add: without a policy service the checks are skipped (no sandbox world to enforce)', existsSync(path.join(jobsDir, 'p15.json')))
+    // B16: an agent-less call cannot route an approval even if the service is present
+    const e16 = await errOf(sched.addJob('p16', specOf({ policy: 'danger-full-access' }), callerOf({ policy: 'read-only', cwd: root, agent: false, approval: seam('allowed-once') })))
+    ok('add: an agent-less caller cannot escalate (no routing target)', e16 !== null && e16.includes('no agent context to route approval through'))
+    // B17: the tool handler derives the caller from a cordis-shaped context (a soft get
+    // accessor only — no declared-inject service properties, the shape of a live runtime
+    // fiber): the policy gap is detected and routed to the approval channel even though
+    // the context object carries no sandboxPolicy property.
+    const { registerTool } = await import(path.join(PKG, 'lib/tool.js'))
+    const policyService = { defaultMode: 'workspace-write', overrideOf: () => undefined }
+    const execOf = (cwd) => ({ agent: { session: { header: { cwd } } }, callId: 'probe', signal: undefined })
+    const rejectSeam = seam('rejected')
+    let toolDef = null
+    registerTool({
+      get: (name) => (name === 'sandboxPolicy' ? policyService : name === 'approval' ? rejectSeam : undefined),
+      tools: { register: (def) => { toolDef = def; return () => {} } },
+    }, sched)
+    const t17 = await errOf(toolDef.execute({ verb: 'add', id: 'pt1', spec: specOf({ policy: 'danger-full-access' }) }, execOf(root)))
+    ok('tool: a context with only soft get accessors still derives the caller and routes the check', t17 !== null && t17.includes('the user rejected the approval') && rejectSeam.calls.length === 1)
+    ok('tool: a denied escalation through the handler leaves no job file', !existsSync(path.join(jobsDir, 'pt1.json')))
+    // B18: an approved escalation through the full tool path creates the job
+    const approveSeam = seam('allowed-once')
+    registerTool({
+      get: (name) => (name === 'sandboxPolicy' ? policyService : name === 'approval' ? approveSeam : undefined),
+      tools: { register: (def) => { toolDef = def; return () => {} } },
+    }, sched)
+    const r18 = await toolDef.execute({ verb: 'add', id: 'pt2', spec: specOf({ policy: 'danger-full-access' }) }, execOf(root))
+    ok('tool: an approved escalation through the handler creates the job', typeof r18 === 'string' && r18.startsWith('added job pt2') && approveSeam.calls.length === 1)
+    // B19: a context that composes neither service degrades: the checks skip, nothing throws
+    registerTool({
+      get: () => undefined,
+      tools: { register: (def) => { toolDef = def; return () => {} } },
+    }, sched)
+    const r19 = await toolDef.execute({ verb: 'add', id: 'pt3', spec: specOf({ policy: 'danger-full-access' }) }, execOf(root))
+    ok('tool: a context without a policy world skips the check without crashing', typeof r19 === 'string' && r19.startsWith('added job pt3'))
+
+    // B20-B33: the run-root scope rule — a job's effective run root is its control
+    // domain: a same-level session outside that domain cannot manage the job (disable,
+    // enable, cancel, run, update, delete) without the approval channel, while a job's
+    // own run-root session manages itself freely and a full-access session is exempt
+    // from both axes. The cases below drive the run-world instance.
+    const p20File = path.join(jobsDir, 'p20.json')
+    const p21File = path.join(jobsDir, 'p21.json')
+    await sched.addJob('p20', specOf({ cwd: path.join(root, 'runs20') }), wsCaller)
+    ok('scope: a job whose run root sits under the caller root is accepted', existsSync(p20File))
+    await sched.addJob('p21', specOf({ cwd: path.join(outsideDir, 'runs21') }), callerOf({ cwd: outsideDir }))
+    ok('scope: a job whose run root sits under its creating session root is accepted', existsSync(p21File))
+    // B20: a same-level session outside the job's run root cannot disable it
+    const e20 = await errOf(sched.setEnabled('p21', false, callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('disable: cross-scope routes through the approval channel', e20 !== null && e20.includes('the user rejected the approval') && e20.includes(`outside this session's workspace root`))
+    ok('disable: a denied cross-scope disable leaves the job file untouched', JSON.parse(readFileSync(p21File, 'utf8')).enable !== false)
+    const b20Seam = seam('allowed-once')
+    const r20 = await sched.setEnabled('p21', false, callerOf({ cwd: root, approval: b20Seam }))
+    ok('disable: an approved cross-scope disable proceeds', typeof r20 === 'string' && r20.startsWith('disabled job p21') && b20Seam.calls.length === 1)
+    ok('disable: the file stores the disabled state', JSON.parse(readFileSync(p21File, 'utf8')).enable === false)
+    ok('disable: the approval question names the job run root and the caller root', b20Seam.calls[0].displayReason.en.includes('runs21') && b20Seam.calls[0].displayReason.en.includes('workspace root'))
+    // B21: a same-level session outside the run root cannot enable it either
+    const e21 = await errOf(sched.setEnabled('p21', true, callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('enable: cross-scope routes through the approval channel', e21 !== null && e21.includes('the user rejected the approval'))
+    await sched.setEnabled('p21', true, callerOf({ cwd: root, approval: seam('allowed-once') }))
+    ok('enable: an approved cross-scope enable re-enables the job', JSON.parse(readFileSync(p21File, 'utf8')).enable === true)
+    // B22: the cancel gate is uniform — it applies even when no run is in progress
+    const e22 = await errOf(sched.cancelJob('p21', callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('cancel: cross-scope applies even with no in-progress runs (uniform gate)', e22 !== null && e22.includes('the user rejected the approval'))
+    // B23: a same-level session outside the run root cannot manually run it
+    const e23 = await errOf(sched.manualRun('p21', callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('run: cross-scope routes through the approval channel', e23 !== null && e23.includes('the user rejected the approval'))
+    // B24: a same-level session outside the run root cannot rewrite the spec
+    const before24 = readFileSync(p21File, 'utf8')
+    const e24 = await errOf(sched.updateJob('p21', specOf({ prompt: 'touched24' }), callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('update: cross-scope routes through the approval channel', e24 !== null && e24.includes('the user rejected the approval') && readFileSync(p21File, 'utf8') === before24)
+    // B25: a same-level session outside the run root cannot delete it
+    const e25 = await errOf(sched.deleteJob('p21', callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('delete: cross-scope routes through the approval channel', e25 !== null && e25.includes('the user rejected the approval') && existsSync(p21File))
+    // B26: a session whose cwd is the job's run root manages that job freely
+    // (no approval, not even when no channel is available), but cannot reach a
+    // sibling job's run root
+    const selfCaller = callerOf({ cwd: path.join(outsideDir, 'runs21'), policy: 'workspace-write', approval: null })
+    const r26 = await sched.setEnabled('p21', false, selfCaller)
+    ok('scope: a job run-root session manages its own job without escalation', typeof r26 === 'string' && r26.startsWith('disabled job p21'))
+    const e26b = await errOf(sched.manualRun('p20', selfCaller))
+    ok('scope: the same session cannot reach a sibling job run root (fail closed)', e26b !== null && e26b.includes('no approval channel is available'))
+    // B27: a caller without a known cwd cannot be verified in scope — fail closed
+    const e27 = await errOf(sched.setEnabled('p20', false, callerOf({ policy: 'workspace-write', cwd: null, approval: null })))
+    ok('scope: a caller with no cwd fails closed', e27 !== null && e27.includes('no approval channel is available'))
+    // B28: a full-access caller is exempt from both axes (any cwd, no approval)
+    const r28 = await sched.setEnabled('p20', false, callerOf({ policy: 'danger-full-access', cwd: outsideDir, approval: null }))
+    ok('scope: a full-access caller is exempt from the scope axis', typeof r28 === 'string' && r28.startsWith('disabled job p20'))
+    // B29: one approval covers a level gap and a scope breach together
+    await sched.setEnabled('p21', true, callerOf({ policy: 'danger-full-access', cwd: outsideDir, approval: null }))
+    const bothSeam = seam('rejected')
+    const e29 = await errOf(sched.setEnabled('p21', false, callerOf({ policy: 'read-only', cwd: root, approval: bothSeam })))
+    ok('escalation: one approval covers the level gap and the scope breach together', e29 !== null && e29.includes(`above this session's policy 'read-only'`) && e29.includes(`outside this session's workspace root`) && bothSeam.calls.length === 1)
+    // B30: add carries no scope axis — an explicit run cwd outside the session root is
+    // denied locally (no approval routing)
+    const e30 = await errOf(sched.addJob('p30', specOf({ cwd: outsideDir }), callerOf({ cwd: root, approval: null })))
+    ok('add: a run cwd outside the session root is denied locally', e30 !== null && e30.includes(`is outside this session's workspace root`) && !existsSync(path.join(jobsDir, 'p30.json')))
+    // B31: an in-scope job cannot be moved outside the session root by a same-level
+    // caller (the new spec's cwd rule still applies below escalation)
+    const e31 = await errOf(sched.updateJob('p20', specOf({ policy: 'workspace-write', cwd: outsideDir }), callerOf({ cwd: root, approval: null })))
+    ok('update: an in-scope job cannot move its run cwd outside the session root locally', e31 !== null && e31.includes(`is outside this session's workspace root`))
+    // B32: an approved cross-scope update lifts the new-spec cwd rule
+    await sched.updateJob('p21', specOf({ policy: 'workspace-write', cwd: outsideDir }), callerOf({ cwd: root, approval: seam('allowed-once') }))
+    ok('update: an approved cross-scope update writes the new spec', readFileSync(p21File, 'utf8').includes(outsideDir))
+    // B33: an unparseable on-disk spec fails closed on both axes (top level +
+    // undetermined run root)
+    writeFileSync(path.join(jobsDir, 'p33.json'), '{ not valid json')
+    const e33 = await errOf(sched.deleteJob('p33', callerOf({ cwd: root, approval: seam('rejected') })))
+    ok('delete: an unparseable on-disk spec fails closed on both axes', e33 !== null && e33.includes('the user rejected the approval') && e33.includes('undetermined run root'))
+    ok('delete: a denied delete leaves the broken file untouched', existsSync(path.join(jobsDir, 'p33.json')))
+
+    // R1..R9: run-cwd inheritance — the plugin ships no host-absolute run path: an add that
+    // omits run.cwd inherits the creating session's workspace (materialized into the job
+    // file), a creating session without a cwd is refused locally (set run.cwd explicitly),
+    // and jobs whose run root cannot be determined fail closed on management and on run
+    // start.
+    // R1: an add that omits run.cwd inherits the creating session's workspace and
+    // persists it into the job file (the stored spec is self-describing)
+    await sched.addJob('r1', specOf({}), wsCaller)
+    const vr1File = JSON.parse(readFileSync(path.join(jobsDir, 'r1.json'), 'utf8'))
+    eq('add: an omitted run cwd inherits the creating session workspace itself and is persisted', vr1File.run.cwd, root)
+    // R2: the creating scope manages the inherited job freely; a sibling scope cannot
+    // (fail closed when no channel is available)
+    const vr2 = await sched.setEnabled('r1', false, wsCaller)
+    ok('scope: the creating scope manages its inherited job without escalation', typeof vr2 === 'string' && vr2.startsWith('disabled job r1'))
+    const vr2b = await errOf(sched.setEnabled('r1', true, callerOf({ cwd: outsideDir, approval: null })))
+    ok('scope: a sibling scope cannot manage the inherited job (fail closed)', vr2b !== null && vr2b.includes('no approval channel is available'))
+    await sched.setEnabled('r1', true, wsCaller)
+    // R3: a caller without a cwd — the add is refused locally with the actionable
+    // remedy (no approval routing; no deployment default run root exists)
+    const vr3 = await errOf(sched.addJob('r3', specOf({}), callerOf({ cwd: null, approval: null })))
+    ok('add: a caller without a cwd is refused locally (set run.cwd explicitly)', vr3 !== null && vr3.includes('set run.cwd explicitly') && !existsSync(path.join(jobsDir, 'r3.json')))
+    // R6: a legacy job file that omits run.cwd has an undetermined run root — both
+    // axes fail closed through approval
+    writeFileSync(path.join(jobsDir, 'r6.json'), JSON.stringify(specOf({ prompt: 'legacy' })))
+    await sched.reload()
+    const vr6 = await errOf(sched.setEnabled('r6', false, callerOf({ cwd: outsideDir, approval: seam('rejected') })))
+    ok('disable: an undetermined run root fails closed through the approval channel', vr6 !== null && vr6.includes('the user rejected the approval') && vr6.includes('undetermined run root'))
+    const vr6Seam = seam('allowed-once')
+    await sched.setEnabled('r6', false, callerOf({ cwd: outsideDir, approval: vr6Seam }))
+    ok('disable: a human-approved management of an undetermined-root job proceeds', vr6Seam.calls.length === 1)
+    // R7: starting a run of a job whose run cwd cannot be determined fails the run
+    // create_failed with the actionable remedy
+    const vr7 = await sched.manualRun('r6', callerOf({ policy: 'danger-full-access', approval: null }))
+    ok('run: an undetermined run cwd fails create_failed with the actionable remedy', typeof vr7 === 'string' && vr7.includes('create_failed') && vr7.includes('has no run cwd: set run.cwd in the job spec'))
+    // R8: an update that omits run.cwd keeps the job's existing run root (materialized
+    // into the stored file, mirroring the add-time inheritance)
+    await sched.updateJob('r1', specOf({ prompt: 'touched-r8' }), wsCaller)
+    const vr1After = JSON.parse(readFileSync(path.join(jobsDir, 'r1.json'), 'utf8'))
+    eq('update: an omitted run cwd keeps the job existing run root', vr1After.run.cwd, root)
+    ok('update: the rewritten file keeps the rest of the spec', readFileSync(path.join(jobsDir, 'r1.json'), 'utf8').includes('touched-r8'))
+    // R9: unit shape of the shared derivation (one rule feeds runner and privilege)
+    const { runRootOfSpec, inheritRunRoot } = await import(path.join(PKG, 'lib/privilege.js'))
+    eq('runRootOfSpec: an explicit cwd is the run root', runRootOfSpec({ run: { prompt: 'x', cwd: '/a/b/' } }), '/a/b/')
+    eq('runRootOfSpec: an omitted cwd is undetermined (legacy file) → null', runRootOfSpec({ run: { prompt: 'x' } }), null)
+    eq('inheritRunRoot: the creating session workspace itself', inheritRunRoot(root), root)
+    eq('inheritRunRoot: a caller without a cwd → null (add refused locally)', inheritRunRoot(null), null)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+}
 { // shipped-source hygiene guard: src/ stays self-contained and process-fact-free — a reader
   // needs only the file plus stable external authorities (systemd v262 semantics, the croner
   // API, framework API names). No CJK characters, no two-digit project version tags (a

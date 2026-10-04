@@ -2,7 +2,7 @@
 
 dsh-timer gives a dsh deployment a built-in job scheduler: when a trigger expires the plugin starts a fresh prompted session, so recurring work - daily reports, periodic checks, one-shot tasks - runs on schedule inside the dsh process.
 
-- Jobs live in a job directory, written by hand or with the eight-verb `timer` tool
+- Jobs live in a job directory, written by hand or with the nine-verb `timer` tool
 - Three trigger kinds: cron expressions and one-shot ISO times, intervals counted from the last run, and one-shot startup delays
 - Each run is a fresh prompted session with a configurable working directory, preset, model, and file policy
 - A per-job state file tracks the next trigger and the 50 most recent run records
@@ -19,7 +19,7 @@ dsh-timer is an out-of-tree plugin for a dsh profile. Install it with the dsh pl
 dsh plugin --profile <name> add dsh-timer
 ```
 
-No configuration is required: the plugin registers itself and reads jobs from the job directory described below.
+No configuration is required: the plugin registers itself and reads jobs from the job directory described below. One optional plugin config field refines the deployment's layout: `jobsDir` (the job directory, below).
 
 ## Jobs
 
@@ -40,7 +40,13 @@ The last channel above can be written as a loader expression. A `!!js` value in 
     jobsDir: !!js dshHomePath('profiles', '<name>', 'timers')
 ```
 
-Here `<name>` is the profile directory name under the harness home. A patch entry replaces the whole `config` key of the targeted entry; dsh-timer's default config is empty, so the example sets its only config field.
+Here `<name>` is the profile directory name under the harness home. A patch entry replaces the whole `config` key of the targeted entry; dsh-timer's default config is empty, so the example sets the field it needs.
+
+### Run root
+
+A job's run root is the working directory its run session is created in, and — under the plugin's privilege model — the job's control scope: a session outside that root (and below full access) manages the job only through the approval channel. The run root is the spec's explicit `run.cwd`; an `add` without one inherits the creating session's workspace itself (`<session-cwd>`) and persists the inherited value into the job file, so a job created through the plugin always carries its run root in its own file. A job whose spec sets no `run.cwd` has an undetermined run root: managing it fails closed through the approval channel, and its runs fail `create_failed` with the actionable remedy (set `run.cwd` in the job file).
+
+The plugin ships no host-absolute run path of its own: every run root is either the caller's session fact or the spec's own explicit value.
 
 The directory layout is as follows:
 
@@ -68,9 +74,9 @@ The table below is a quick reference; see `schemas/job.schema.json` for the comp
 | `timeZone` | IANA timezone name | the system timezone | Overrides the system timezone for the job; applies only to calendar conditions. |
 | `persistent` | boolean | `false` | When `true`, if a trigger was due while the process was down or the job disabled, the plugin fires exactly one catch-up run after recovery, rebased to the current moment, and re-arms from the actual trigger moment. The missed interval is not persisted. |
 | `deferReactivation` | boolean | `false` | Applies only to jobs that have onCalendar conditions (on other jobs the value is accepted and ignored). When `true`, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When `false`, the phase advances at every due moment even while a run is in progress. |
-| `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit (`0` / `infinity` / `null` / omitted are all no limit) | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
+| `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
 | `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
-| `run` | object (required) | — | The execution context. `prompt` is required and must be non-empty after trimming whitespace; `cwd`, `preset`, `model`, and `policy` are optional, and a `null` value means the same as omitting the field. `model` is a `provider/model` string (first slash splits provider from model) or a bare model id (it rides the deployment's default provider); with `model` omitted the deployment's default model selection is used, when one is configured — a run whose route is incomplete fails at its first turn. |
+| `run` | object (required) | — | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, and `policy` are optional — full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above). |
 
 Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (≈ 30 days), `y`/`year(s)` (≈ 365 days) — case-sensitive (`m` is minutes, `M` is months) — where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) — a JSON number is never accepted.
 
@@ -83,7 +89,7 @@ The plugin persists each job's runtime state in `<job directory>/state/<jobId>.j
   "schemaVersion": 1,
   "jobId": "example",
   "lastActivationMs": 1727200000000,     // most recent run start moment (never run = process start)
-  "lastTriggerMs": 1727100000000,        // job-level last on-calendar elapse (fire or overlap=skip consume; recompute anchor)
+  "lastTriggerMs": 1727100000000,        // job-level last on-calendar elapse (fire or overlap=skip consume; the phase anchor for the next elapse)
   "calendars": {                            // indexed by onCalendar value
     "0 9 * * 1-5": {
       "value": "0 9 * * 1-5",
@@ -111,18 +117,19 @@ A run record inside `runs` has the following keys:
 | `summary` | a summary of the run, truncated to 2000 characters |
 | `error` | the error text when the run failed |
 
-`finished` only records that the turn ended cleanly; it does not claim that the task succeeded — the outcome lives in `summary` and the session transcript. A job that has never run reports `recent run: none (no runs yet)`.
+`finished` only records that the turn ended cleanly; it does not claim that the task succeeded — the outcome lives in `summary` and the session transcript. A job that has never run reports no run in status (`recent run: none (no runs yet)` in the detail, `last run: none (no runs yet)` on the overview line).
 
 ## Managing timers
 
-The plugin registers the `timer` tool, which exposes the following eight verbs, and the `dsh-timer` skill:
+The plugin registers the `timer` tool, which exposes the following nine verbs, and the `dsh-timer` skill:
 
 | Verb | Effect |
 | --- | --- |
 | `reload` | rescans the job directory |
 | `status` (id optional) | shows an overview or a single job's detail |
 | `run` | triggers the job manually once (allowed for disabled jobs too; unconditional start) |
-| `enable` / `disable` | flips the in-file `enable` field; `disable` = `disable --now` (cancels the job's in-progress runs first) |
+| `enable` | sets the in-file `enable` field to true (the onStartupSec already-fired flag is preserved via in-process memory) |
+| `disable` | sets the in-file `enable` field to false, cancelling the job's in-progress runs first (= `disable --now`) |
 | `add` | creates a job; rejects if the id already exists (delete the job first to replace it) or if the spec is invalid |
 | `update` | replaces the spec of an existing job in place; rejects if the id is unknown (use `add`) or if the spec is invalid; the job's state file is preserved |
 | `delete` | deletes the job file and its state file (in-progress runs settle without writing state) |

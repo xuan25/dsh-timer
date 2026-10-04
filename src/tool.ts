@@ -6,10 +6,46 @@
 // mirror the null tolerance of schemas/job.schema.json so both spec paths accept the same values.
 // When a verb throws, the framework returns error.message to the model as the failure content.
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { Context } from './types.js'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { Context, Policy } from './types.js'
+import type { ApprovalSeam, CallerContext, RuntimeAgentFace } from './privilege.js'
 import type { TimerScheduler } from './scheduler.js'
 
 export const VERBS = ['reload', 'status', 'run', 'enable', 'disable', 'add', 'update', 'delete', 'cancel']
+
+/**
+ * Derive the caller identity of the in-flight tool call for the privilege checks.
+ * `exec.agent` is the runtime agent driving the caller session (the public Agent
+ * interface carries only the id; the runtime aspect carries the live session, whose
+ * header holds the session cwd). Both framework services are read through cordis'
+ * non-strict `ctx.get` accessor (the context proxy requires a declared inject for
+ * property access inside a runtime, and a host may compose either service or neither
+ * — `ctx.get` returns undefined then and the check degrades or fails closed instead
+ * of throwing).
+ */
+function deriveCallerContext(ctx: Context, exec: ToolRunContext | undefined): CallerContext {
+  const sandboxPolicy = ctx.get('sandboxPolicy') as
+    | { readonly defaultMode: Policy; overrideOf(session: unknown): Policy | undefined }
+    | undefined
+  const hasPolicyWorld = sandboxPolicy !== undefined && sandboxPolicy !== null
+  const agent = (exec?.agent as unknown as RuntimeAgentFace | undefined) ?? null
+  const session = agent?.session
+  const policy = !hasPolicyWorld || agent === null || session === undefined
+    ? null
+    : (sandboxPolicy as { readonly defaultMode: Policy; overrideOf(session: unknown): Policy | undefined }).overrideOf(session) ??
+      sandboxPolicy.defaultMode
+  const approval = (ctx.get('approval') as ApprovalSeam | undefined) ?? null
+  return {
+    hasPolicyWorld,
+    policy,
+    defaultMode: hasPolicyWorld ? sandboxPolicy.defaultMode : null,
+    cwd: session?.header?.cwd ?? null,
+    agent,
+    approval,
+    callId: exec?.callId,
+    signal: exec?.signal,
+  }
+}
 
 /**
  * Register the timer tool (9 verbs → TimerScheduler methods).
@@ -32,6 +68,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         'update replaces the spec of an existing job in place (update-only: it fails if the job does not exist; add creates it); the job state file is preserved, so run history and scheduling anchors survive and a changed trigger reschedules from the existing anchor; in-progress runs keep executing the spec they started with. ' +
         'delete removes the job config and its state file. ' +
         'cancel cancels all in-progress runs of a job. ' +
+        'Privilege rules: two axes gate the job-acting verbs (update, enable, disable, run, cancel, delete) — the level axis (the job\'s file-access policy above this session\'s own level) and the scope axis (the job\'s effective run root outside this session\'s workspace root; a job\'s own run session manages itself freely) — either routing through the approval channel for a one-shot human decision; a full-access session is exempt from both axes; add is exempt from the scope axis and a non-full-access session may set a new job\'s explicit run cwd only at or under its own session cwd (denied locally, no approval); an approved operation lifts the cwd rule; the run.cwd inheritance rules are in the cwd field description. ' +
         'Job spec fields: onCalendar, onActiveSec, onStartupSec, timeZone, persistent, deferReactivation, runtimeMaxSec, overlap, enable, run.',
       parameters: {
         verb: { type: 'string', required: true, enum: VERBS, description: 'The verb to execute.' },
@@ -44,17 +81,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
           type: 'object',
           additionalProperties: true,
           description:
-            'Job spec for add and update. A valid spec needs at least one trigger in effect (onCalendar, onActiveSec, or onStartupSec; setting a trigger field to null means that trigger is explicitly not used) and a run object with a non-empty prompt. ' +
-            'onCalendar is an array of cron expressions or ISO datetimes, or null to explicitly not use the calendar trigger. ' +
-            'onActiveSec re-arms the job that long after its last run started, or null to explicitly not use the trigger. ' +
-            'onStartupSec fires once that long after process start, or null to explicitly not use the trigger. ' +
-            'timeZone overrides the system timezone for calendar conditions. ' +
-            'persistent recovers missed calendar triggers with one catch-up fire. ' +
-            'deferReactivation computes the next trigger from the run end instead of the scheduled time. ' +
-            'runtimeMaxSec bounds the duration of a single run; 0 / infinity / null means no limit. ' +
-            'overlap decides what happens when a trigger fires while a run is in progress: skip, stop, or allow. ' +
-            'enable stores the job disabled when false. ' +
-            'run holds the per-run settings; prompt is required, and null or an omitted cwd, preset, model, or policy keeps the deployment default.',
+            'Job spec for add and update. A valid spec needs at least one trigger in effect (onCalendar, onActiveSec, or onStartupSec; a trigger set to null is explicitly not used) plus a run object with a non-empty prompt. Each field\'s semantics are in its field description below.',
           properties: {
             onCalendar: {
               oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }],
@@ -76,7 +103,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
             persistent: {
               type: 'boolean',
               description:
-                'When true, calendar triggers missed while the job was inactive fire once after it becomes active again; the default is false.',
+                'When true, calendar triggers missed while the process was down or the job was disabled fire exactly once after recovery, rebased to the current moment; the default is false.',
             },
             deferReactivation: {
               type: 'boolean',
@@ -103,7 +130,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
               type: 'object',
               additionalProperties: true,
               description:
-                'Per-run settings. prompt is required; cwd, preset, model, and policy are optional, and null or an omitted field keeps the deployment default; a preset-less run mounts the deployment\'s default agent preset (the framework\'s baseline composition when the host provides no preset service or no usable default).',
+                'Per-run settings: prompt (required) plus the optional fields cwd, preset, model, and policy — see their field descriptions for the exact semantics.',
               properties: {
                 prompt: {
                   type: 'string',
@@ -111,11 +138,12 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
                 },
                 cwd: {
                   oneOf: [{ type: 'string' }, { type: 'null' }],
-                  description: 'Working directory of the run session; null or an omitted field keeps the default.',
+                  description:
+                    'Working directory of the run session. On add, a null or an omitted field inherits the creating session\'s workspace itself (<session-cwd>); a creating session without a cwd must set an explicit value or the add is refused. On update, a null or an omitted field keeps the job\'s existing run cwd.',
                 },
                 preset: {
                   oneOf: [{ type: 'string' }, { type: 'null' }],
-                  description: 'Agent preset of the run session; naming a preset that is unresolvable or broken fails the run as create_failed; null or an omitted field mounts the deployment\'s default preset (the framework\'s baseline composition when the host provides no usable one).',
+                  description: 'Agent preset of the run session; naming a preset that is unresolvable or broken fails the run as create_failed; null or an omitted field mounts the deployment\'s default preset.',
                 },
                 model: {
                   oneOf: [{ type: 'string' }, { type: 'null' }],
@@ -137,28 +165,31 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         schema: { type: 'string' },
         render: (args, value) => [{ type: 'text', text: value }],
       },
-      async execute(args) {
+      async execute(args, exec) {
         const verb = args?.verb
         if (!verb) return `missing verb (${VERBS.join('/')})`
+        // The caller identity of this in-flight call: the privilege checks
+        // gate every verb that can create, modify, or act on a job.
+        const caller = deriveCallerContext(ctx, exec)
         switch (verb) {
           case 'reload':
             return scheduler.reload()
           case 'status':
             return scheduler.statusText(args?.id)
           case 'run':
-            return scheduler.manualRun(args?.id)
+            return scheduler.manualRun(args?.id, caller)
           case 'enable':
-            return scheduler.setEnabled(args?.id, true)
+            return scheduler.setEnabled(args?.id, true, caller)
           case 'disable':
-            return scheduler.setEnabled(args?.id, false)
+            return scheduler.setEnabled(args?.id, false, caller)
           case 'add':
-            return scheduler.addJob(args?.id, args?.spec)
+            return scheduler.addJob(args?.id, args?.spec, caller)
           case 'update':
-            return scheduler.updateJob(args?.id, args?.spec)
+            return scheduler.updateJob(args?.id, args?.spec, caller)
           case 'delete':
-            return scheduler.deleteJob(args?.id)
+            return scheduler.deleteJob(args?.id, caller)
           case 'cancel':
-            return scheduler.cancelJob(args?.id)
+            return scheduler.cancelJob(args?.id, caller)
           default:
             return `unknown verb: ${verb}`
         }

@@ -1,7 +1,7 @@
 // dsh-timer scheduling core:
 //   directory scan (event + manual reload) → job models → 30s tick (clock rewind / system
 //   timezone change / expiry fires / overlap) → recompute after run settlement → verbs
-//   (reload/status/run/enable/disable/add/delete/cancel).
+//   (reload/status/run/enable/disable/add/update/delete/cancel).
 // Config = <jobsDir>/<id>.json (one file per id; the in-file `enable` field decides
 // enabled/disabled: absent or true = enabled, false = disabled).
 // State = <jobsDir>/state/<id>.json (atomic write, best-effort); deleting a job removes the
@@ -19,10 +19,13 @@ import { systemTimeZone, formatWall, makeTzChangeDetector, decodeSystemTimeZoneF
 import { jobFileFor, stateDirFor, freshState, loadState, stateFileFor, pushRun, updateRun, type StateCalendar, type StateRun } from './state.js'
 import { recomputeLoad, recomputeRunEnd, recomputeClockRewind, recomputeTzChange, applyFire } from './rearm.js'
 import { startRun, newRunRecord } from './runner.js'
+import { checkCallerPrivilege, effectiveJobPolicy, inheritRunRoot, modelJobPolicy, policyOfRank, POLICY_RANK, runRootOfSpec, specRunCwd, specRunPolicy } from './privilege.js'
+import type { CallerContext } from './privilege.js'
 import type {
   CalCond,
   JobModel,
   Logger,
+  Policy,
   RescanSummary,
   RunOutcome,
   RunRecord,
@@ -59,17 +62,14 @@ export class TimerScheduler {
   private readonly detectTzChange: () => boolean
   private readonly ctx: SchedulerOptions['ctx']
   private readonly logger: Logger
-  /** Job directory (mirrors the jobsDir field of the JS version's createScheduler return; read-only externally). */
+  /** Job directory (read-only externally). */
   readonly jobsDir: string
   private tickDispose: (() => void) | null = null
   private watcher: FSWatcher | null = null
   private reloadDispose: (() => void) | null = null
   private prevTickWall = Date.now()
   private prevTickMono = process.hrtime.bigint()
-  /** Single-flight reentrancy guard: an interval firing while a tick is still in flight is
-   *  dropped. The tick is synchronous (create settlement is a detached self-settling
-   *  lifecycle), so this guards against re-entrancy only — a stuck create can no longer
-   *  hold a tick in flight. */
+    /** Single-flight reentrancy guard for the tick interval (rationale at the guard site in start()). */
   private tickInFlight = false
   private stopped = false
 
@@ -206,9 +206,9 @@ export class TimerScheduler {
     this.syncCalendarsToState(model)
   }
 
-  /** Consume one fire (create_failed: the fire is treated as happened — ISO stays consumed;
-   * a suspended cron re-arms from the fire moment, the job anchor advanced by the fire site
-   * → no per-fire retry storm). */
+  /** Consume one fire (create-failed path): the fire is treated as happened — the ISO stays
+   * consumed; a suspended cron re-arms from the fire moment, the job anchor advanced by the
+   * fire site (no retry: the bookkeeping rationale is bookkeepCreateFailed). */
   private consumeFire(cond: CalCond, firedAtMs: number): void {
     if (cond.cal.kind === 'iso') return // applyFire already set consumed=true
     if (cond.nextFireMs === null) {
@@ -287,7 +287,7 @@ export class TimerScheduler {
     // cause/error are explicitly null (the state file keeps the null keys).
     // startedAt is included: when onRunStart was skipped (the deleted-job path returns above)
     // updateRun takes the upsert branch; without startedAt, jobDetail's formatWall would throw
-    // "Invalid time value" (a latent issue from the JS version, fixed here).
+    // "Invalid time value".
     // Normally onRunStart already pushed the in-flight record, so updateRun merges in place and
     // this field has the same value as record0 — zero behavior change.
     updateRun(target.state, run.runId, {
@@ -461,6 +461,23 @@ export class TimerScheduler {
     }
     if (!isPlainObject(parsed)) return null
     return { canon: canonicalJson(parsed), obj: parsed as Record<string, unknown> }
+  }
+
+  /**
+   * The privilege-relevant facts a verb acting on an existing job must check: the policy
+   * level it runs at, and its effective run root (the job's control scope under the scope
+   * rule). The in-memory model is preferred when one is loaded; else the on-disk spec (the
+   * verb already confirmed the file exists); an unparseable on-disk spec fails closed on
+   * both axes (assume the top level, unknown run root). null = no policy world to resolve
+   * against (host without the sandbox-policy service) — then every check is skipped.
+   */
+  private async existingJobLevels(idKey: string, caller: CallerContext | undefined): Promise<{ policy: Policy | null; runRoot: string | null }> {
+    const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
+    if (model) return { policy: modelJobPolicy(model, caller), runRoot: runRootOfSpec(model.spec) }
+    if (!caller || !caller.hasPolicyWorld || caller.defaultMode === null) return { policy: null, runRoot: null }
+    const base = await this.readJobSpecFile(this.jobFileOf(idKey))
+    if (base === null) return { policy: 'danger-full-access', runRoot: null } // unparseable on-disk spec → assume the top level (fail closed)
+    return { policy: specRunPolicy(base.obj) ?? caller.defaultMode, runRoot: runRootOfSpec(base.obj) }
   }
 
   /**
@@ -1079,14 +1096,14 @@ export class TimerScheduler {
     lines.push(`[enabled] ${this.jobs.size}`)
     for (const model of this.jobs.values()) {
       const last = model.state.runs.at(-1)
-      const lastPart = last ? ` | last run: ${last.status}${last.cause ? `(${last.cause})` : ''}` : ' | recent run: none (no runs yet)'
+      const lastPart = last ? ` | last run: ${last.status}${last.cause ? ` (${last.cause})` : ''}` : ' | last run: none (no runs yet)'
       lines.push(`- ${model.id}  next: ${this.fmtNext(model, nowMs)}${lastPart}`)
     }
     lines.push('')
     lines.push(`[disabled] ${this.disabledJobs.size}`)
     for (const [id, model] of [...this.disabledJobs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       const last = model.state.runs.at(-1)
-      const lastPart = last ? ` | last run: ${last.status}${last.cause ? `(${last.cause})` : ''}` : ' | recent run: none (no runs yet)'
+      const lastPart = last ? ` | last run: ${last.status}${last.cause ? ` (${last.cause})` : ''}` : ' | last run: none (no runs yet)'
       lines.push(`- ${id}  enabled=false${lastPart}`)
     }
     lines.push('')
@@ -1103,7 +1120,7 @@ export class TimerScheduler {
    * temporary model is built; settlement records state into the job's state file as usual).
    * Manual runs have no fire accounting: create_failed is only recorded, no retry is triggered.
    */
-  async manualRun(id: string | undefined): Promise<string> {
+  async manualRun(id: string | undefined, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
     const nowMs = Date.now()
     const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
@@ -1112,6 +1129,10 @@ export class TimerScheduler {
       if (rej) throw new Error(`job ${idKey} was rejected and cannot run: ${rej}`)
       throw new Error(this.jobNotFoundMsg(idKey))
     }
+    // Privilege check before the run starts: manually triggering a job
+    // that runs at a level above the caller's, or outside the caller's run-root scope, is
+    // an escalation — through the approval channel.
+    await checkCallerPrivilege(caller, { verb: 'run', jobId: idKey, jobPolicy: modelJobPolicy(model, caller), runRoot: runRootOfSpec(model.spec) })
     const isDisabled = !this.jobs.has(idKey)
     const run = newRunRecord({ jobId: idKey, trigger: 'manual', startedAt: nowMs })
     run.model = model
@@ -1132,7 +1153,6 @@ export class TimerScheduler {
       this.settleUnsettledRun(model, run, createError, nowMs)
     }
     if (createError !== null) {
-      // Manual runs have no fire accounting: create_failed is only recorded, no retry
       return `run start failed (create_failed): ${createError} (recorded)`
     }
     return `started run ${run.runId.slice(0, 8)} (${idKey}, ${isDisabled ? 'manual while disabled' : 'manual'})${isDisabled ? '; state will be recorded on settlement' : ''}`
@@ -1148,14 +1168,27 @@ export class TimerScheduler {
    * debounce instead); the rescan's enabled→disabled flip cancels any runs the verb did not
    * cancel (runs already carrying a pending cause are not cancelled twice).
    */
-  async setEnabled(id: string | undefined, enabled: boolean): Promise<string> {
+  async setEnabled(id: string | undefined, enabled: boolean, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
     if (enabled && this.jobs.has(idKey)) return `job ${idKey} is already enabled`
     if (!enabled && this.disabledJobs.has(idKey)) return `job ${idKey} is already disabled`
     if (this.rejected.has(idKey)) throw new Error(`job ${idKey} is rejected; fix the spec first (${this.rejected.get(idKey)})`)
     if (!this.jobs.has(idKey) && !this.disabledJobs.has(idKey)) throw new Error(this.jobNotFoundMsg(idKey))
+    // Privilege check before the file write (both directions): enabling a job that runs
+    // at a level above the caller's schedules future runs at that level, and disabling or
+    // stopping such a job — like cancelling its runs — is equally gated: a session outside
+    // the job's run root or below its level must not stop or rewrite another scope's job,
+    // system-critical ones included. Both route through the approval channel.
+    const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
+    if (model) {
+      await checkCallerPrivilege(caller, {
+        verb: enabled ? 'enable' : 'disable',
+        jobId: idKey,
+        jobPolicy: modelJobPolicy(model, caller),
+        runRoot: runRootOfSpec(model.spec),
+      })
+    }
     let cancelled = 0
-    const model = this.jobs.get(idKey)
     if (model && !enabled) cancelled = this.cancelActiveRuns(model) // disable --now adaptation
     const jsonFile = this.jobFileOf(idKey)
     let written = false
@@ -1185,14 +1218,24 @@ export class TimerScheduler {
    * touching its spec or state file (accidental overwrite would lose the job's config and
    * state); to replace a job, delete it first (timer delete) and add again — the delete
    * also removes the state file, so next-fire times and one-shot marks do not survive.
+   * The spec is validated, then a spec that omits run.cwd inherits the creating session's
+   * workspace itself, and the inherited value is materialized into the stored spec, so the
+   * job file is self-describing and the runner and the privilege check read one value from
+   * it. A spec that sets run.cwd to a string is stored as given; a null or omitted
+   * run.cwd enters the inheritance rule above. A creating session
+   * without a cwd → refused locally fail-closed.
    * The resulting enabled state is the new spec's `enable` field (absent → enabled; explicit
    * false → disabled).
    * Invalid spec → throw, file not written (no last-good; consistent with the whole-rejection semantics).
    */
-  async addJob(id: string | undefined, spec: unknown): Promise<string> {
+  async addJob(id: string | undefined, spec: unknown, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id, 'starts with a lowercase letter or digit, may contain hyphens, max 64 characters')
     const v = validateJob(spec, { nowMs: Date.now(), defaultTz: systemTimeZone() })
     if (!v.ok) throw new Error(`spec invalid: ${v.errors.join('; ')} (existing job, if any, is untouched)`)
+    const storedSpec = this.withInheritedRunCwd(spec, idKey, caller)
+    // Privilege check before any file effect (the rule set is in checkCallerPrivilege's
+    // doc; the run.cwd caller-root rule sees only the caller's EXPLICIT run.cwd).
+    await checkCallerPrivilege(caller, { verb: 'add', jobId: idKey, jobPolicy: effectiveJobPolicy(spec, caller), runCwd: specRunCwd(spec) })
     const jsonFile = this.jobFileOf(idKey)
     try {
       await fsp.access(jsonFile)
@@ -1201,23 +1244,52 @@ export class TimerScheduler {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
       /* new file */
     }
-    await this.writeJsonFile(jsonFile, spec)
+    await this.writeJsonFile(jsonFile, storedSpec)
     const r = await this.rescan()
     return `added job ${idKey} (currently ${r.enabled} enabled, ${r.disabled} disabled)`
+  }
+
+  /**
+   * A copy of the validated spec with the inherited run cwd persisted (validation ran
+   * first, so the spec is a plain object); a spec that sets run.cwd to a string is
+   * returned unchanged. The copy keeps every other field and the run block's other keys.
+   */
+  private withInheritedRunCwd(spec: unknown, idKey: string, caller: CallerContext | undefined): unknown {
+    const explicit = specRunCwd(spec)
+    if (explicit !== undefined && explicit !== null) return spec
+    const inherited = inheritRunRoot(caller?.cwd ?? null)
+    if (inherited === null) {
+      throw new Error(
+        `job ${idKey} has no run cwd and this session has no workspace to inherit one from: set run.cwd explicitly in the spec`,
+      )
+    }
+    return this.withRunCwdValue(spec, inherited)
+  }
+
+  /**
+   * A copy of the spec with the given run cwd landed under run.cwd (the copy keeps every
+   * other field and the run block's other keys).
+   */
+  private withRunCwdValue(spec: unknown, cwd: string): unknown {
+    const base = spec as Record<string, unknown>
+    const runBlock = isPlainObject(base.run) ? { ...(base.run as Record<string, unknown>) } : {}
+    runBlock.cwd = cwd
+    return { ...base, run: runBlock }
   }
 
   /**
    * update = update only: the job file must exist (an unknown id is rejected — add creates
    * it). The whole spec is replaced in place (no field-level patch), and the state file is
    * preserved, exactly like a manual edit of the job file: run history, phase anchors and
-   * one-shot marks survive; a changed trigger definition reschedules from the existing
-   * anchor, and stale state fields of a changed trigger kind are ignored. In-progress runs
+   * one-shot marks survive (the update's run.cwd handling is at the inline site in the
+   * method); a changed trigger definition reschedules from the existing anchor, and stale
+   * state fields of a changed trigger kind are ignored. In-progress runs
    * keep executing the spec they started with; the new spec applies at the next trigger (an
    * enabled→disabled flip in the new spec still cancels them at the rescan, like every other
    * disabled write).
    * Invalid spec → throw, existing file untouched (no last-good; whole-rejection semantics).
    */
-  async updateJob(id: string | undefined, spec: unknown): Promise<string> {
+  async updateJob(id: string | undefined, spec: unknown, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
     const v = validateJob(spec, { nowMs: Date.now(), defaultTz: systemTimeZone() })
     if (!v.ok) throw new Error(`spec invalid: ${v.errors.join('; ')} (existing job, if any, is untouched)`)
@@ -1230,7 +1302,24 @@ export class TimerScheduler {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     if (!exists) throw new Error(`job ${idKey} not found; add creates it (timer add id=${idKey})`)
-    await this.writeJsonFile(jsonFile, spec)
+    // Privilege check before any file effect: the update must clear BOTH
+    // levels — the job's existing level (a lower-level session may not touch a higher-level
+    // job at all, not even to demote or rewrite its prompt) and the level the new spec
+    // results in.
+    const newPolicy = effectiveJobPolicy(spec, caller)
+    const { policy: existingPolicy, runRoot } = await this.existingJobLevels(idKey, caller)
+    const jobPolicy =
+      newPolicy === null || existingPolicy === null
+        ? null
+        : policyOfRank(Math.max(POLICY_RANK[newPolicy], POLICY_RANK[existingPolicy]))
+    // An update that omits or nulls run.cwd keeps the job's existing run root: the value is
+    // materialized into the stored spec so the file stays self-describing (the same shape as
+    // the add-time inheritance). A job whose existing root is undetermined stays
+    // undetermined — the update does not worsen it, and its management still fails closed.
+    const storedSpec =
+      typeof specRunCwd(spec) !== 'string' && runRoot !== null ? this.withRunCwdValue(spec, runRoot) : spec
+    await checkCallerPrivilege(caller, { verb: 'update', jobId: idKey, jobPolicy, runCwd: specRunCwd(spec), runRoot })
+    await this.writeJsonFile(jsonFile, storedSpec)
     const r = await this.rescan()
     return `updated job ${idKey} (state preserved; currently ${r.enabled} enabled, ${r.disabled} disabled)`
   }
@@ -1242,11 +1331,28 @@ export class TimerScheduler {
    * from both registries (in-progress runs continue to settle but do not write state or
    * recompute — the audit trail is the session log).
    */
-  async deleteJob(id: string | undefined): Promise<string> {
+  async deleteJob(id: string | undefined, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
+    const jsonFile = this.jobFileOf(idKey)
+    // Existence check before any effect: an unknown id fails as not-found (the later unlink
+    // re-checks, so a file removed between the check and the unlink is reported, not a
+    // silent no-op).
+    let filePresent = false
+    try {
+      await fsp.access(jsonFile)
+      filePresent = true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+    if (!filePresent) throw new Error(this.jobNotFoundMsg(idKey))
+    // Privilege check before the file is removed: deleting a job above the
+    // caller's level, or outside the caller's run-root scope, destroys an artifact of
+    // another actor — through the approval channel.
+    const { policy: existingPolicy, runRoot } = await this.existingJobLevels(idKey, caller)
+    await checkCallerPrivilege(caller, { verb: 'delete', jobId: idKey, jobPolicy: existingPolicy, runRoot })
     let removedFile = false
     try {
-      await fsp.unlink(this.jobFileOf(idKey))
+      await fsp.unlink(jsonFile)
       removedFile = true
     } catch {
       /* not present */
@@ -1269,11 +1375,15 @@ export class TimerScheduler {
    * cause wins, see markCancelled). N counts the in-progress runs the verb handles — runs newly
    * marked here plus runs already carrying a pending cause that are left untouched, so a
    * concurrent timeout keeps its failed/timeout attribution.
+   * The privilege check runs before the no-op detection, so the gate is uniform: a session
+   * outside the job's run root or below its level cannot cancel the job's runs even at a
+   * moment when no run happens to be in progress.
    */
-  cancelJob(id: string | undefined): Promise<string> {
+  async cancelJob(id: string | undefined, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
     const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
     if (!model) throw new Error(this.jobNotFoundMsg(idKey))
+    await checkCallerPrivilege(caller, { verb: 'cancel', jobId: idKey, jobPolicy: modelJobPolicy(model, caller), runRoot: runRootOfSpec(model.spec) })
     // Owned runs only: a recreated same-id job does not cancel a stale generation's runs.
     const active = this.ownedRuns(model)
     if (active.length === 0) return Promise.resolve(`job ${idKey} has no in-progress runs`)

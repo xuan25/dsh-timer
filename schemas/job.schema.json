@@ -41,7 +41,7 @@
     },
     "runtimeMaxSec": {
       "type": ["string", "null"],
-      "description": "A span such as 2m that bounds the duration of a single run, or 0 / infinity / null for no limit; omitting the field means no limit. A run that exceeds the limit is cancelled and recorded as failed."
+      "description": "A span such as 2m that bounds the duration of a single run; 0, infinity, null, or an omitted field means no limit. A run that exceeds the limit is cancelled and recorded as failed."
     },
     "overlap": {
       "type": "string",
@@ -61,11 +61,11 @@
         },
         "cwd": {
           "type": ["string", "null"],
-          "description": "Working directory of the run session. It also bounds the write sandbox when the policy is workspace-write. The default is /workspace/timer/runs/<id>/. Omit the field or set it to null to keep the default."
+          "description": "Working directory of the run session. It also bounds the write sandbox when the policy is workspace-write. On add, omitting the field or setting it to null inherits the creating session's workspace itself (<session-cwd>); a creating session without a cwd must set it explicitly, or the add is refused. On update, omitting the field or setting it to null keeps the job's existing run cwd."
         },
         "preset": {
           "type": ["string", "null"],
-          "description": "Agent preset of the run session, mounted through the host's agent preset service when the session is created. Naming a preset that is unresolvable or broken fails the run as create_failed. Omit the field or set it to null to mount the deployment's default preset (the framework's baseline composition when the host provides no preset service or no usable default)."
+          "description": "Agent preset of the run session, mounted through the host's agent preset service when the session is created. Naming a preset that is unresolvable or broken fails the run as create_failed. Omit the field or set it to null to mount the deployment's default preset."
         },
         "model": {
           "type": ["string", "null"],
