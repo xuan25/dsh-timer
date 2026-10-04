@@ -4,15 +4,28 @@
 // would: it compiles both schemas and asserts their structural accept/reject behavior,
 // including the at-least-one-non-null-trigger rule encoded in the job schema root
 // allOf. The package tree only carries ajv 6 (a transitive eslint dependency,
-// draft-07 only), so this gate pins the host tree's ajv 8 2020-12 build, the same
-// tree the peer packages resolve from; the sanity check below fails if the pinned
-// path ever resolves to a non-2020-12 build.
-import { readFileSync } from 'node:fs'
+// draft-07 only), so this gate uses the host tree's ajv 8 2020-12 build, the same
+// tree the peer packages resolve from: the host location is probed at runtime (the
+// DSH_HOME env, then the default host install location), and the sanity check below
+// fails if the resolved build is not a 2020-12 build.
+import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import Ajv2020 from '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/ajv/dist/2020.js'
 
-// Sanity: the pinned build must be the draft 2020-12 validator. `items: false`
+// Host-location probe for the ajv 8 2020-12 build (see header): the DSH_HOME env,
+// then the default host install location. If neither holds it, the gate fails with
+// a clear message instead of a bare import error.
+const AJV_CANDIDATES = [
+  process.env.DSH_HOME ? path.join(process.env.DSH_HOME, 'node_modules', 'ajv', 'dist', '2020.js') : null,
+  '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/ajv/dist/2020.js',
+].filter((p) => p !== null)
+const AJV_PATH = AJV_CANDIDATES.find((p) => existsSync(p))
+if (!AJV_PATH) {
+  throw new Error(`schema-gate: no ajv build in the host tree (looked for ajv/dist/2020.js at: ${AJV_CANDIDATES.join(', ')}); set DSH_HOME or install the host dsh tree`)
+}
+const { default: Ajv2020 } = await import(AJV_PATH)
+
+// Sanity: the resolved build must be the draft 2020-12 validator. `items: false`
 // is only legal in 2020-12 (draft-07 requires items to be a schema or an array
 // of schemas, so a draft-07 build fails to compile it); it must compile here
 // and reject any item.
@@ -21,9 +34,9 @@ import Ajv2020 from '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/a
   try {
     probe = new Ajv2020().compile({ type: 'array', items: false })
   } catch {
-    throw new Error('pinned ajv build is not the draft 2020-12 validator (items:false failed to compile)')
+    throw new Error('the resolved ajv build is not the draft 2020-12 validator (items:false failed to compile)')
   }
-  if (probe(['a'])) throw new Error('pinned ajv build is not the draft 2020-12 validator (items:false accepted an item)')
+  if (probe(['a'])) throw new Error('the resolved ajv build is not the draft 2020-12 validator (items:false accepted an item)')
 }
 
 const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
