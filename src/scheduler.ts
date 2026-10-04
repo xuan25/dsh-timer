@@ -987,7 +987,13 @@ export class TimerScheduler {
         continue
       }
       if (cond.consumed) continue
-      if (cond.nextFireMs !== null) cands.push({ at: cond.nextFireMs, label: `onCalendar ${cond.key}` })
+      if (cond.nextFireMs === null) {
+        // Defer-suspended condition (a deferReactivation run is in progress): re-armed
+        // from the run end, so no fixed future moment exists until then.
+        cands.push({ at: null, label: `onCalendar ${cond.key} (suspended until run end)` })
+        continue
+      }
+      cands.push({ at: cond.nextFireMs, label: `onCalendar ${cond.key}` })
     }
     if (model.monotonicSpanMs !== null) {
       const base = model.state.lastActivationMs ?? this.processStartMs
@@ -1036,9 +1042,8 @@ export class TimerScheduler {
       let s = `onCalendar ${cond.key}`
       if (cond.neverMatch) s += ' [no future match]'
       else if (cond.consumed) s += ' [fired (one-shot ISO instant)]'
-      else if (cond.nextFireMs !== null) {
-        s += ` next ${formatWall(cond.nextFireMs, model.tz)}`
-      }
+      else if (cond.nextFireMs === null) s += ' [suspended (deferReactivation run in progress; re-arms at run end)]'
+      else s += ` next ${formatWall(cond.nextFireMs, model.tz)}`
       conds.push(s)
     }
     if (model.monotonicSpanMs !== null) {
@@ -1161,12 +1166,14 @@ export class TimerScheduler {
   /**
    * enable / disable (= disable --now): optimistic read-modify-write of the job file's
    * `enable` field (read → parse → change only `enable` → re-read → the canonical JSON must
-   * still match the read baseline, otherwise retry once; still conflicting → not written).
-   * disable = disable --now adaptation: cancel the job's in-progress runs first (recorded as
-   * failed/cancelled at settlement), then enable: false; enable = enable: true. After the
-   * write the verb triggers one immediate rescan (manual file edits go through the fs.watch
-   * debounce instead); the rescan's enabled→disabled flip cancels any runs the verb did not
-   * cancel (runs already carrying a pending cause are not cancelled twice).
+   * still match the read baseline, otherwise retry once; still conflicting → not written,
+   * and no run is cancelled: the conflict path has no side effect).
+   * disable = disable --now adaptation: write enable: false first; only once the write
+   * succeeds are the job's in-progress runs cancelled (recorded as failed/cancelled at
+   * settlement); enable = enable: true. After the write the verb triggers one immediate
+   * rescan (manual file edits go through the fs.watch debounce instead); the rescan's
+   * enabled→disabled flip cancels any runs the verb did not cancel (runs already carrying
+   * a pending cause are not cancelled twice).
    */
   async setEnabled(id: string | undefined, enabled: boolean, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
@@ -1188,8 +1195,6 @@ export class TimerScheduler {
         runRoot: runRootOfSpec(model.spec),
       })
     }
-    let cancelled = 0
-    if (model && !enabled) cancelled = this.cancelActiveRuns(model) // disable --now adaptation
     const jsonFile = this.jobFileOf(idKey)
     let written = false
     for (let attempt = 0; attempt < 2 && !written; attempt++) {
@@ -1206,6 +1211,10 @@ export class TimerScheduler {
       written = true
     }
     if (!written) throw new Error(`job ${idKey} changed concurrently (conflict); not written`)
+    // The write succeeded: only now cancel the in-progress runs (disable --now
+    // adaptation), so the conflict path above leaves no side effect behind.
+    let cancelled = 0
+    if (model && !enabled) cancelled = this.cancelActiveRuns(model)
     const r = await this.rescan()
     if (!enabled) {
       return `disabled job ${idKey}: cancelled ${cancelled} in-progress run(s) (currently ${r.enabled} enabled, ${r.disabled} disabled)`
