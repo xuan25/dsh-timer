@@ -1718,14 +1718,14 @@ function naiveIsoCond(value, tz, consumed = false) {
   }
 
   // A capturing ctx: ctx.get routes to the given services (soft read),
-  // the logger records warn/info/error lines.
+  // the logger records warn/info/error/debug lines.
   function fakeCtx(services = {}) {
-    const state = { warns: [], infos: [], errors: [] }
+    const state = { warns: [], infos: [], errors: [], debugs: [] }
     const mkLog = () => ({
       warn: (m) => state.warns.push(m),
       error: (m) => state.errors.push(m),
       info: (m) => state.infos.push(m),
-      debug: () => {},
+      debug: (m) => state.debugs.push(m),
     })
     const ctx = {
       get: (name) => (services[name] !== undefined ? services[name] : undefined),
@@ -2497,7 +2497,7 @@ function naiveIsoCond(value, tz, consumed = false) {
       mkdirSync(storeRoot)
       const { sweeper, state } = makeSweeper(home, { storeRoot, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() } })
       sweeper.start()
-      ok('arming-a: start arms an immediate first round', await waitFor(() => state.infos.some((m) => m.includes('sweep done')), 2000))
+      ok('arming-a: start arms an immediate first round (the no-op round logs at debug)', await waitFor(() => state.debugs.some((m) => m.includes('sweep done')), 2000))
       sweeper.start() // re-arming is a no-op
       sweeper.dispose()
       ok('arming-a: dispose stops the timer without error', true)
