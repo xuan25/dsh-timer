@@ -140,8 +140,8 @@ export interface SystemTimeZoneDecoded {
 
 /**
  * Decode the current system timezone from /etc/localtime:
- * symlink → the path segments after zoneinfo/ (e.g. /usr/share/zoneinfo/Asia/Shanghai → Asia/Shanghai);
- * regular file → scan the tzdata binary for candidate identifiers (heuristic; the longest
+ * symlink -> the path segments after zoneinfo/ (e.g. /usr/share/zoneinfo/Asia/Shanghai -> Asia/Shanghai);
+ * regular file -> scan the tzdata binary for candidate identifiers (heuristic; the longest
  * valid IANA name wins).
  * @returns decoded result; { tz: null, source: null } when unreadable or no candidate found.
  */

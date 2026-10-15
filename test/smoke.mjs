@@ -14,7 +14,7 @@ const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { registerTool } = await import(path.join(PKG, 'lib/tool.js'))
 const { registerSkill } = await import(path.join(PKG, 'lib/skill.js'))
 
-// ── tool schema: the framework pre-execution validation gate ─────────────
+// -- tool schema: the framework pre-execution validation gate -------------
 let captured = null
 const toolCtx = { tools: { register: (tool) => { captured = tool; return () => {} } } }
 registerTool(toolCtx, {})
@@ -72,7 +72,7 @@ firstViolation({ verb: 'add', spec: { onCalendar: ['0 9 * * *'], run: { prompt: 
 firstViolation({ spec: { onCalendar: ['0 9 * * *'], run: { prompt: 'p' } } }, 'verb')
 firstViolation({ verb: 'explode' }, 'verb')
 
-// ── skill provider: shape, frontmatter strip, schema pointer ─────────────
+// -- skill provider: shape, frontmatter strip, schema pointer -------------
 let skillFactory = null
 const skillCtx = { skills: { registerProvider: (factory) => { skillFactory = factory; return () => {} } } }
 registerSkill(skillCtx)

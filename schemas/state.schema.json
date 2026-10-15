@@ -20,7 +20,7 @@
     },
     "lastTriggerMs": {
       "type": ["number", "null"],
-      "description": "Epoch milliseconds of the job's last on-calendar elapse moment (a fired trigger, or a due trigger consumed in place by an overlap=skip — the recompute anchor, one shared moment for all of the job's calendar conditions). Null when no on-calendar elapse has been persisted yet; absent (tolerated on load, treated as no anchor). Never advanced by monotonic or manual fires."
+      "description": "Epoch milliseconds of the job's last on-calendar elapse moment (a fired trigger, or a due trigger consumed in place by an overlap=skip - the recompute anchor, one shared moment for all of the job's calendar conditions). Null when no on-calendar elapse has been persisted yet; absent (tolerated on load, treated as no anchor). Never advanced by monotonic or manual fires."
     },
     "calendars": {
       "type": "object",

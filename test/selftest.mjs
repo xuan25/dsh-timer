@@ -1,7 +1,7 @@
 // dsh-timer selftest: pure-logic modules + croner probe vectors + runner settlement
 // behavior probe (stub session, real dsh-session event envelope; no live framework services).
 // Run: node test/selftest.mjs. All green = exit code 0.
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,13 +18,13 @@ let passed = 0
 const failures = []
 function ok(name, cond, extra = '') {
   if (cond) passed++
-  else failures.push(`${name}${extra ? ` — ${extra}` : ''}`)
+  else failures.push(`${name}${extra ? ` - ${extra}` : ''}`)
 }
 function eq(name, actual, expected) {
   ok(name, JSON.stringify(actual) === JSON.stringify(expected), `actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)}`)
 }
 
-// ── constants & job ids ─────────────────────────────────────────────
+// -- constants & job ids ---------------------------------------------
 eq('TICK_MS', TICK_MS, 30_000)
 eq('CLOCK_JUMP_MS', CLOCK_JUMP_MS, 1_000)
 ok('JOB_ID_RE valid set', [
@@ -35,10 +35,10 @@ ok('JOB_ID_RE invalid set', [
   JOB_ID_RE.test(' '), JOB_ID_RE.test('ABC'), JOB_ID_RE.test('-abc'),
   JOB_ID_RE.test('a_b'), JOB_ID_RE.test('a.b'), JOB_ID_RE.test('a'.repeat(65)),
 ].every((x) => !x))
-eq('getProfileDir non node_modules → null', getProfileDir(PKG), null)
+eq('getProfileDir non node_modules -> null', getProfileDir(PKG), null)
 eq('getProfileDir node_modules hit', getProfileDir('/x/node_modules/dsh-timer'), '/x')
 
-// ── parseSpan (systemd-style span) ─────────────────────────────────
+// -- parseSpan (systemd-style span) ---------------------------------
 const SPAN_CASES = [
   ['30', 30_000], ['5min', 300_000], ['1h30min', 5_400_000], ['2d', 172_800_000],
   ['1h 30min', 5_400_000], ['0', 0], ['abc', null], ['1M', 2_592_000_000],
@@ -50,22 +50,22 @@ const SPAN_CASES = [
   ['', null], [42, null],
 ]
 for (const [v, want] of SPAN_CASES) eq(`parseSpan(${JSON.stringify(v)})`, parseSpan(v), want)
-eq('parseSpan positive "0" → null', parseSpan('0', { positive: true }), null)
-eq('parseSpan positive "30" → 30000', parseSpan('30', { positive: true }), 30_000)
-eq('parseSpan positive "5usec" → 0 (positive pre-round, rounds to 0)', parseSpan('5usec', { positive: true }), 0)
-eq('parseSpan positive "1usec" → 0 (positive pre-round, rounds to 0)', parseSpan('1usec', { positive: true }), 0)
-eq('parseSpan "0.5ms" → null (fractional component is not in the span grammar)', parseSpan('0.5ms'), null)
-eq('parseRuntimeMax "0" → null', parseRuntimeMax('0'), null)
-eq('parseRuntimeMax "infinity" → null', parseRuntimeMax('infinity'), null)
-eq('parseRuntimeMax "10min" → 600000', parseRuntimeMax('10min'), 600_000)
-eq('parseRuntimeMax "30" → 30000', parseRuntimeMax('30'), 30_000)
-eq('parseRuntimeMax "1usec" → 0 (positive pre-round, rounds to 0)', parseRuntimeMax('1usec'), 0)
-eq('parseRuntimeMax "abc" → undefined', parseRuntimeMax('abc'), undefined)
-eq('parseRuntimeMax "-5" → undefined', parseRuntimeMax('-5'), undefined)
-eq('parseRuntimeMax null → null (no limit)', parseRuntimeMax(null), null)
-eq('parseRuntimeMax 42 → undefined (numbers rejected)', parseRuntimeMax(42), undefined)
+eq('parseSpan positive "0" -> null', parseSpan('0', { positive: true }), null)
+eq('parseSpan positive "30" -> 30000', parseSpan('30', { positive: true }), 30_000)
+eq('parseSpan positive "5usec" -> 0 (positive pre-round, rounds to 0)', parseSpan('5usec', { positive: true }), 0)
+eq('parseSpan positive "1usec" -> 0 (positive pre-round, rounds to 0)', parseSpan('1usec', { positive: true }), 0)
+eq('parseSpan "0.5ms" -> null (fractional component is not in the span grammar)', parseSpan('0.5ms'), null)
+eq('parseRuntimeMax "0" -> null', parseRuntimeMax('0'), null)
+eq('parseRuntimeMax "infinity" -> null', parseRuntimeMax('infinity'), null)
+eq('parseRuntimeMax "10min" -> 600000', parseRuntimeMax('10min'), 600_000)
+eq('parseRuntimeMax "30" -> 30000', parseRuntimeMax('30'), 30_000)
+eq('parseRuntimeMax "1usec" -> 0 (positive pre-round, rounds to 0)', parseRuntimeMax('1usec'), 0)
+eq('parseRuntimeMax "abc" -> undefined', parseRuntimeMax('abc'), undefined)
+eq('parseRuntimeMax "-5" -> undefined', parseRuntimeMax('-5'), undefined)
+eq('parseRuntimeMax null -> null (no limit)', parseRuntimeMax(null), null)
+eq('parseRuntimeMax 42 -> undefined (numbers rejected)', parseRuntimeMax(42), undefined)
 
-// ── canonical JSON (order-independent spec comparison; F7 regression) ─────
+// -- canonical JSON (order-independent spec comparison; the hot-update re-adopt regression) -----
 {
   eq('canonical equal under key reordering',
     canonicalJson({ b: 1, a: { d: [1, 2], c: 'x' } }),
@@ -83,7 +83,7 @@ eq('parseRuntimeMax 42 → undefined (numbers rejected)', parseRuntimeMax(42), u
   eq('canonical primitives', [canonicalJson(42), canonicalJson('x'), canonicalJson(null), canonicalJson(true), canonicalJson('a\nb')], ['42', '"x"', 'null', 'true', '"a\\nb"'])
 }
 
-// ── timezone utilities ─────────────────────────────────────────
+// -- timezone utilities -----------------------------------------
 eq('isValidTimeZone true/false sets', [
   T.isValidTimeZone('Asia/Shanghai'), T.isValidTimeZone('UTC'), T.isValidTimeZone('America/New_York'),
   !T.isValidTimeZone('Asia/Nope'), !T.isValidTimeZone(''), !T.isValidTimeZone('foo/bar/bad!'),
@@ -99,7 +99,7 @@ eq('tzOffsetMs NY winter -5h', T.tzOffsetMs(Date.parse('2026-01-15T12:00:00Z'), 
 eq('tzOffsetMs NY summer -4h', T.tzOffsetMs(Date.parse('2026-07-15T12:00:00Z'), 'America/New_York'), -14_400_000)
 eq('wallToMs winter inverse', T.wallToMs({ year: 2026, month: 1, day: 15, hour: 7, minute: 0, second: 0 }, 'America/New_York'), Date.parse('2026-01-15T12:00:00Z'))
 eq('wallToMs summer inverse', T.wallToMs({ year: 2026, month: 7, day: 15, hour: 8, minute: 0, second: 0 }, 'America/New_York'), Date.parse('2026-07-15T12:00:00Z'))
-eq('wallToMs DST gap → null', T.wallToMs({ year: 2026, month: 3, day: 8, hour: 2, minute: 30, second: 0 }, 'America/New_York'), null)
+eq('wallToMs DST gap -> null', T.wallToMs({ year: 2026, month: 3, day: 8, hour: 2, minute: 30, second: 0 }, 'America/New_York'), null)
 eq('wallToMs normal after gap', T.wallToMs({ year: 2026, month: 3, day: 8, hour: 3, minute: 30, second: 0 }, 'America/New_York'), Date.parse('2026-03-08T07:30:00Z'))
 eq('formatWall', T.formatWall(Date.parse('2026-08-24T16:00:00Z'), 'Asia/Shanghai'), '2026-08-25 00:00:00 (Asia/Shanghai)')
 const dec = T.decodeSystemTimeZoneFromLocaltime()
@@ -108,7 +108,7 @@ const det = T.makeTzChangeDetector()
 eq('tz detector first call = baseline (false)', det(), false)
 eq('tz detector unchanged (false)', det(), false)
 
-// ── cron parsing / vectors ─────────────────────────────────────────
+// -- cron parsing / vectors -----------------------------------------
 const BASE = Date.parse('2026-08-24T16:00:00Z')
 function nextMs(value, tz, fromMs = BASE) {
   const cal = C.CalendarCondition.fromParsed(value, C.parseCalendarValue(value, tz), tz)
@@ -127,7 +127,7 @@ eq('nextMatch 6-field seconds', nextMs('55 * * * * *', 'UTC'), Date.parse('2026-
 eq('nextMatch weekday (SH)', nextMs('0 12 * * 1-5', 'Asia/Shanghai'), Date.parse('2026-08-25T04:00:00Z'))
 eq('nextMatch day 31 (SH)', nextMs('0 0 31 * *', 'Asia/Shanghai'), Date.parse('2026-08-30T16:00:00Z'))
 eq('nextMatch DOM/DOW OR (SH)', nextMs('0 0 13 * 5', 'Asia/Shanghai'), Date.parse('2026-08-27T16:00:00Z'))
-eq('nextMatch 2/31 never matches → null', nextMs('0 0 31 2 *', 'UTC'), null)
+eq('nextMatch 2/31 never matches -> null', nextMs('0 0 31 2 *', 'UTC'), null)
 eq('nextMatch 2/29 leap year', nextMs('0 0 29 2 *', 'UTC'), Date.parse('2028-02-29T00:00:00Z'))
 eq('nextMatch 2/29 from 2027', nextMs('0 0 29 2 *', 'UTC', Date.parse('2027-01-01T00:00:00Z')), Date.parse('2028-02-29T00:00:00Z'))
 eq('isNeverMatch 2/31', C.CalendarCondition.fromParsed('0 0 31 2 *', C.parseCalendarValue('0 0 31 2 *', 'UTC'), 'UTC').isNeverMatch(BASE), true)
@@ -141,7 +141,7 @@ for (const v of THROW_VECTORS) {
 }
 ok('assertCronPattern valid does not throw', (() => { try { C.assertCronPattern('0 9 * * 1-5', 'Asia/Shanghai'); return true } catch { return false } })())
 
-// ── validator matrix ────────────────────────────────────────────
+// -- validator matrix --------------------------------------------
 const NOW = Date.parse('2026-09-20T00:00:00Z')
 function vj(spec, opts = {}) { return validateJob(spec, { nowMs: NOW, defaultTz: 'UTC', ...opts }) }
 function expectReject(name, spec, substr) {
@@ -172,7 +172,7 @@ function expectReject(name, spec, substr) {
   // every calendar condition carries the job's effective timezone (the job-level
   // timeZone, not the default timezone), so cron matching fires in the job tz.
   eq('validator cron condition tz = job-level timeZone', r.calendars[0].tz, 'Asia/Shanghai')
-  // 2026-09-20T00:00:00Z = Sunday 08:00 Asia/Shanghai → next weekday 09:00 SH = Monday 2026-09-21T01:00:00Z
+  // 2026-09-20T00:00:00Z = Sunday 08:00 Asia/Shanghai -> next weekday 09:00 SH = Monday 2026-09-21T01:00:00Z
   eq('validator cron condition nextMatch in job tz', r.calendars[0].nextMatch(NOW), Date.parse('2026-09-21T01:00:00Z'))
 }
 {
@@ -187,7 +187,7 @@ function expectReject(name, spec, substr) {
   const r = vj({ onCalendar: ['2027-01-01T00:00:00Z'], runtimeMaxSec: '0', run: { prompt: 'p' } })
   ok('validator one-shot ISO + runtimeMaxSec 0 valid', r.ok === true && r.runtimeMaxMs === null && r.calendars[0].kind === 'iso', JSON.stringify(r.errors))
 }
-{ // F3: naive ISO stores its wall components (the tz-change re-resolution input); the stored
+{ // naive ISO stores its wall components (the tz-change re-resolution input); the stored
   // wall time is tz-independent while instantMs follows the effective timezone
   const r = vj({ onCalendar: ['2027-01-01T09:00:00'], run: { prompt: 'p' } })
   ok('validator naive ISO valid (defaultTz)', r.ok === true && r.calendars[0].kind === 'iso', JSON.stringify(r.errors))
@@ -230,7 +230,7 @@ expectReject('validator onStartupSec invalid', { onStartupSec: 'abc', run: { pro
   ok('validator onStartupSec null accepted (explicit non-use)', rn3.ok === true && rn3.onStartupSecMs === null, JSON.stringify(rn3.errors))
   const rn4 = vj({ onCalendar: null, onActiveSec: null, onStartupSec: '30s', run: { prompt: 'p' } })
   ok('validator mixed null triggers normalize to absent', rn4.ok === true && rn4.calendars.length === 0 && rn4.onUnitActiveSecMs === null && rn4.onStartupSecMs === 30_000, JSON.stringify(rn4.errors))
-  expectReject('validator all three triggers null → missing trigger', { onCalendar: null, onActiveSec: null, onStartupSec: null, run: { prompt: 'p' } }, 'missing trigger')
+  expectReject('validator all three triggers null -> missing trigger', { onCalendar: null, onActiveSec: null, onStartupSec: null, run: { prompt: 'p' } }, 'missing trigger')
   expectReject('validator onActiveSec invalid string still rejected', { onActiveSec: 'abc', run: { prompt: 'p' } }, 'positive time span')
   expectReject('validator onCalendar string rejected (not array, not null)', { onCalendar: 'x', run: { prompt: 'p' } }, 'array of strings')
 }
@@ -294,7 +294,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 {
   // the plugin ships no host-absolute run path and no directory layout of its own: a job's
   // run root is either the creating session's workspace itself (inherited at add time,
-  // persisted into the job file) or the spec's explicit run.cwd — there is no
+  // persisted into the job file) or the spec's explicit run.cwd - there is no
   // deployment-declared default run root and no per-job subpath. Bind the code shape and
   // the schema description so the artifact sites cannot drift apart.
   const runnerSrc = readFileSync(path.join(PKG, 'src/runner.ts'), 'utf8')
@@ -425,8 +425,8 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 {
   // hot-update and span/doc contract fixes:
   const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
-  // The enabled→disabled flip branch hot-updates the spec and reloads state before the
-  // registry move (symmetric with the disabled→disabled and disabled→enabled paths).
+  // The enabled->disabled flip branch hot-updates the spec and reloads state before the
+  // registry move (symmetric with the disabled->disabled and disabled->enabled paths).
   const inJobsBlock = schedulerSrc.slice(
     schedulerSrc.indexOf('if (inJobs) {'),
     schedulerSrc.indexOf('const inDisabled = this.disabledJobs.get(id)'),
@@ -435,7 +435,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
     inJobsBlock.indexOf('if (!enabled) {'),
     inJobsBlock.indexOf('if (canonicalJson(v.spec) === canonicalJson(inJobs.spec))'),
   )
-  ok('enabled→disabled flip hot-updates spec, reloads state and rebuilds calendars', flipBranch.includes('this.applySpecUpdate(inJobs, v)') && flipBranch.includes('this.cancelActiveRuns(inJobs)') && flipBranch.includes('this.jobs.delete(id)') && flipBranch.includes('this.disabledJobs.set(id, inJobs)') && flipBranch.includes('this.reloadJobState(inJobs)') && flipBranch.includes('this.buildCalendars(inJobs, nowMs)'))
+  ok('enabled->disabled flip hot-updates spec, reloads state and rebuilds calendars', flipBranch.includes('this.applySpecUpdate(inJobs, v)') && flipBranch.includes('this.cancelActiveRuns(inJobs)') && flipBranch.includes('this.jobs.delete(id)') && flipBranch.includes('this.disabledJobs.set(id, inJobs)') && flipBranch.includes('this.reloadJobState(inJobs)') && flipBranch.includes('this.buildCalendars(inJobs, nowMs)'))
   ok('spec update precedes the registry move in the flip branch', flipBranch.indexOf('applySpecUpdate(inJobs, v)') !== -1 && flipBranch.indexOf('applySpecUpdate(inJobs, v)') < flipBranch.indexOf('this.jobs.delete(id)'))
   // fmtNext (shared by list and detail modes) prints ms units and reports the earliest due label.
   const fmtNext = schedulerSrc.slice(schedulerSrc.indexOf('private fmtNext('), schedulerSrc.indexOf('/** Single-job detail'))
@@ -461,8 +461,8 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 }
 {
   // ctx.agents.create is
-  // async — every create failure arrives as a promise rejection, never as a synchronous
-  // throw — so the old try/catch around the call was dead code, and the race's create
+  // async - every create failure arrives as a promise rejection, never as a synchronous
+  // throw - so the old try/catch around the call was dead code, and the race's create
   // branch carried no onRejected handler: a rejected create escaped startRun (its declared
   // StartRunResult was never reached), could abort the tick's job for-loop (sibling jobs
   // missing their trigger), and left the already-registered run record unsettled (in-memory
@@ -471,18 +471,18 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   // manualRun loops contain any unforeseen rejection per job (settleUnsettledRun).
   const runnerSrc = readFileSync(path.join(PKG, 'src/runner.ts'), 'utf8')
   const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
-  ok('runner.ts race create branch has an onRejected handler (rejection → failed result)', runnerSrc.includes('(err): { failed: string } => ({ failed: errMsg(err) })'))
+  ok('runner.ts race create branch has an onRejected handler (rejection -> failed result)', runnerSrc.includes('(err): { failed: string } => ({ failed: errMsg(err) })'))
   ok('runner.ts settles a rejected create through failCreate (agent create failed: ...)', runnerSrc.includes("if ('failed' in createResult)") && runnerSrc.includes('agent create failed: '))
   ok('scheduler.ts contains the per-job startRun rejection guard (tick + manualRun)', (schedulerSrc.match(/unexpected startRun rejection/g) ?? []).length >= 2)
 }
 {
   // add = create only, and a missing id fails fast:
-  // the job-id assertion must reject a missing id before any String() coercion — the
+  // the job-id assertion must reject a missing id before any String() coercion - the
   // literal "undefined" is a grammatically legal job id, so coercing String(undefined)
   // would turn an omitted id argument into a silently created job named "undefined".
   // add no longer overwrites: a job whose file already exists is rejected before any
   // write (the existing job's spec and state files are untouched); replacing a job is a
-  // delete followed by an add — the delete also removes the state file, so next-fire
+  // delete followed by an add - the delete also removes the state file, so next-fire
   // times and one-shot marks do not survive the replacement. The tool description and
   // SKILL.md carry the full create-only wording; the README pins it on the verb rows
   // (create-only on the add row, state-file wipe on the delete row).
@@ -498,7 +498,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('SKILL.md troubleshooting maps the missing-id and already-exists failures', skillMd.includes('a separate tool argument of the verb') && skillMd.includes('already exists'))
   // update = update only (the mirror of create-only add): the job file must exist, the
   // whole spec is replaced in place after validation (an invalid spec leaves the existing
-  // file untouched), and the state file is never removed — run history, phase anchors and
+  // file untouched), and the state file is never removed - run history, phase anchors and
   // one-shot marks survive exactly like a manual edit of the job file (state is keyed by
   // job id, independent of spec content). A changed trigger reschedules from the existing
   // anchor (no phase reset); in-progress runs keep executing the spec they started with.
@@ -514,12 +514,12 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 }
 {
   // tick/create decoupling:
-  // the tick never awaits startRun — a due job's create is a detached self-settling
+  // the tick never awaits startRun - a due job's create is a detached self-settling
   // lifecycle (the CREATE_TIMEOUT_MS deadline is the only escape for a hung create;
   // failCreate / onRunEnd settle the run and its state file; process restart backfills a
   // record the previous process could not settle), so one job's hung create can no longer
   // delay the tick's remaining jobs or later ticks. The tick's create-failed fire
-  // bookkeeping moves into the detached .then continuation (it runs at create settlement —
+  // bookkeeping moves into the detached .then continuation (it runs at create settlement -
   // the same moment the old post-await bookkeeping ran); an unforeseen startRun rejection
   // is contained per job by the continuation's rejection handler (settleUnsettledRun). The
   // manual path still awaits startRun (the operator gets the result).
@@ -531,13 +531,13 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 }
 {
   // deterministic exit-side settlement:
-  // stop() no longer only marks pendingCause — before it resolves it settles every
+  // stop() no longer only marks pendingCause - before it resolves it settles every
   // unsettled run as failed (first-recorded-cause-wins: a pre-existing cancelled/timeout
   // beats the exit mark; the error mapping is identical to the runner's whenIdle
   // settlement so both settlement mechanisms write the same record shape), raises the
   // settled flag before settlement so a still-pending whenIdle IIFE bails out without a
   // second write, and awaits one state-file write per affected model (deterministic
-  // exit-side write — unlike the fire-and-forget settlement persists, it lands before the
+  // exit-side write - unlike the fire-and-forget settlement persists, it lands before the
   // process exits). The plugin disposer awaits stop() (the framework awaits the disposer).
   // The tick interval is disposed before settlement and the tick's stopped guard no-ops a
   // late interval callback, so exit latency is O(1) + disk write, no tick-period
@@ -587,15 +587,15 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
 {
   // minor fixes: runner settlement crash guard, persistStateFile
   // delete race closure, stop() best-effort run-session dispose):
-  // m1: the whenIdle IIFE's settlement body is wrapped in a defensive try/catch — an unexpected
+  // m1: the whenIdle IIFE's settlement body is wrapped in a defensive try/catch - an unexpected
   // throw (event parsing / bookkeeping defect) logs and settles the run as failed/turn_error
   // (degraded settlement, itself guarded) instead of escaping the detached promise as an
   // unhandled rejection (Node default: the host process would crash).
   // m2: persistStateFile re-checks model.deleted before the write and, as the sole state-file
   // writer, removes the file again (best effort) when the job is deleted while the write is in
-  // flight — a job deleted during the write window no longer leaves a re-created orphan state
+  // flight - a job deleted during the write window no longer leaves a re-created orphan state
   // file behind after its own unlink.
-  // m3: stop() disposes the run session (best effort) in addition to cancelling it — the run's
+  // m3: stop() disposes the run session (best effort) in addition to cancelling it - the run's
   // whenIdle IIFE bails out at its settled check and never reaches its own dispose, so without
   // this the agent handles of interrupted runs would linger in memory on the in-process-unload
   // path until the process exits.
@@ -608,8 +608,8 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('stop() disposes the run session of an interrupted run (best effort)', schedulerSrc.includes('run.handle?.dispose()'))
 }
 {
-  // the settlement recompute gate was keyed to model.latestRunId —
-  // the most recently STARTED run — so a non-latest settlement (an earlier parallel run
+  // the settlement recompute gate was keyed to model.latestRunId -
+  // the most recently STARTED run - so a non-latest settlement (an earlier parallel run
   // ending under overlap=allow, a stop-cancelled run) never recomputed, leaving stale armed
   // deadlines that fired at grid points a spec-compliant recompute would skip (a catch-up
   // fire):
@@ -617,7 +617,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   // a full recompute of all trigger conditions runs only when the settled run was the LAST
   // in-flight run (the in-flight set becomes empty). Intermediate settlements (an earlier
   // parallel run under overlap=allow, a stop-cancelled run, a user cancellation) only
-  // record and trigger no recompute — which structurally eliminates the stop-replacement
+  // record and trigger no recompute - which structurally eliminates the stop-replacement
   // cascade (no cancellation-origin plumbing needed). create_failed settlements stay
   // excluded (their re-arm is owned by bookkeepCreateFailed). The latestRunId model field
   // and its latestRunMemory plumbing (the gate was the sole reader) are removed as dead state.
@@ -633,7 +633,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   // two span-parsing fixes (word-form unit alternation; positivity check domain):
   // SPAN_RE's unit alternation was missing the `sec` word form that
   // the shipped README promise ("s, sec, second(s)"), so
-  // "30sec" truncated to "30s" via the single-char class plus residual "ec" → null;
+  // "30sec" truncated to "30s" via the single-char class plus residual "ec" -> null;
   // the fix inserts `sec` right after `seconds?` (ordering: the longer form precedes
   // the shorter so "30seconds" is never truncated to "30sec" + "onds"), which also
   // makes the previously dead UNIT_MS `sec` entry reachable. The
@@ -655,7 +655,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('validator enable absent accepted (default enabled)', vj({ onCalendar: ['0 9 * * *'], run: { prompt: 'p' } }).ok === true)
 }
 
-// ── rearm recompute engine ────────────────────────────────────────────
+// -- rearm recompute engine --------------------------------------------
 // one job-level anchor (JobState.lastTriggerMs = the last
 // on-calendar elapse moment: a fired trigger or a due trigger consumed by an overlap=skip
 // skip) is the recompute base for every condition. The anchor is advanced at the elapse
@@ -672,52 +672,52 @@ function isoCond(instantMs, consumed = false) {
   const cal = C.CalendarCondition.fromParsed(value, C.parseCalendarValue(value, 'UTC'), 'UTC')
   return { cal, consumed, neverMatch: false, nextFireMs: null }
 }
-{ // load: non-persistent, stale anchor (triggers missed while the process was down) → re-arm from now, silently dropped (no missed persistence)
+{ // load: non-persistent, stale anchor (triggers missed while the process was down) -> re-arm from now, silently dropped (no missed persistence)
   const c = cronCond('* * * * *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0 + 10 * MIN, anchorMs: T0, persistent: false })
-  eq('rearm load non-persistent stale anchor → nextMatch(now)', r.nextFireMs, T0 + 11 * MIN)
+  eq('rearm load non-persistent stale anchor -> nextMatch(now)', r.nextFireMs, T0 + 11 * MIN)
   eq('rearm load non-persistent no missed persistence', r.missed, undefined)
 }
-{ // load: persistent, stale anchor → rebase to now (exactly one catch-up fire on the first tick after load)
+{ // load: persistent, stale anchor -> rebase to now (exactly one catch-up fire on the first tick after load)
   const c = cronCond('* * * * *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0 + 10 * MIN, anchorMs: T0, persistent: true })
-  eq('rearm load persistent stale anchor → one catch-up at now', r.nextFireMs, T0 + 10 * MIN)
+  eq('rearm load persistent stale anchor -> one catch-up at now', r.nextFireMs, T0 + 10 * MIN)
   eq('rearm load persistent no missed persistence', r.missed, undefined)
 }
-{ // load: anchor beyond now (the caller must clamp first: a future persisted anchor = out-of-process rewind) → re-arm from the given anchor, no rebase (the function takes the anchor as given)
+{ // load: anchor beyond now (the caller must clamp first: a future persisted anchor = out-of-process rewind) -> re-arm from the given anchor, no rebase (the function takes the anchor as given)
   const c = cronCond('* * * * *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0, anchorMs: T0 + H, persistent: true })
   eq('rearm load anchor beyond now re-arms from anchor', r.nextFireMs, T0 + H + MIN)
 }
-{ // load: first sighting (no anchor persisted) → base = now
+{ // load: first sighting (no anchor persisted) -> base = now
   const c = cronCond('* * * * *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0, anchorMs: null, persistent: false })
   eq('rearm load first sighting re-arms from now', r.nextFireMs, T0 + MIN)
 }
-{ // load: neverMatch → terminal
+{ // load: neverMatch -> terminal
   const c = cronCond('0 0 31 2 *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0 + 10 * MIN, anchorMs: T0, persistent: false })
   eq('rearm load neverMatch terminal', [r.nextFireMs, c.neverMatch], [null, true])
 }
-{ // load: ISO expired → one-shot catch-up pointer at the instant (fires on the next tick)
+{ // load: ISO expired -> one-shot catch-up pointer at the instant (fires on the next tick)
   const c = isoCond(T0 - 5 * MIN, false)
   eq('rearm load iso expired catch-up pointer', R.recomputeLoad(c, { nowMs: T0, anchorMs: null, persistent: false }).nextFireMs, T0 - 5 * MIN)
 }
-{ // load: ISO consumed → terminal
+{ // load: ISO consumed -> terminal
   const c = isoCond(T0 + H, true)
-  eq('rearm load iso consumed → null', R.recomputeLoad(c, { nowMs: T0, anchorMs: null, persistent: false }).nextFireMs, null)
+  eq('rearm load iso consumed -> null', R.recomputeLoad(c, { nowMs: T0, anchorMs: null, persistent: false }).nextFireMs, null)
 }
-{ // runEnd: non-suspended condition maintained in place at its elapse moment → no-op
+{ // runEnd: non-suspended condition maintained in place at its elapse moment -> no-op
   const c = cronCond('*/15 * * * *', 'UTC')
   c.nextFireMs = T0 + 30 * MIN
   eq('rearm runEnd non-suspended no-op (maintained in place)', R.recomputeRunEnd(c, { runEndMs: T0 + 20 * MIN }).nextFireMs, T0 + 30 * MIN)
 }
-{ // runEnd: suspended (a defer=true fire left it at nextFireMs = null) → re-armed from the run end
+{ // runEnd: suspended (a defer=true fire left it at nextFireMs = null) -> re-armed from the run end
   const c = cronCond('*/15 * * * *', 'UTC')
   const r = R.recomputeRunEnd(c, { runEndMs: T0 + 20 * MIN })
   eq('rearm runEnd suspended re-arm from run end', r.nextFireMs, T0 + 30 * MIN)
 }
-{ // runEnd: suspended with no future match → neverMatch
+{ // runEnd: suspended with no future match -> neverMatch
   const c = cronCond('0 0 31 2 *', 'UTC')
   const r = R.recomputeRunEnd(c, { runEndMs: T0 + 20 * MIN })
   eq('rearm runEnd suspended neverMatch', [r.nextFireMs, c.neverMatch], [null, true])
@@ -727,31 +727,31 @@ function isoCond(instantMs, consumed = false) {
   c.nextFireMs = T0 + H
   eq('rearm runEnd iso kept', R.recomputeRunEnd(c, { runEndMs: T0 }).nextFireMs, T0 + H)
 }
-{ // runEnd: ISO consumed → terminal
+{ // runEnd: ISO consumed -> terminal
   const c = isoCond(T0 + H, true)
-  eq('rearm runEnd iso consumed → null', R.recomputeRunEnd(c, { runEndMs: T0 }).nextFireMs, null)
+  eq('rearm runEnd iso consumed -> null', R.recomputeRunEnd(c, { runEndMs: T0 }).nextFireMs, null)
 }
-{ // runEnd: neverMatch → terminal
+{ // runEnd: neverMatch -> terminal
   const c = cronCond('0 0 31 2 *', 'UTC')
   c.neverMatch = true
-  eq('rearm runEnd neverMatch → null', R.recomputeRunEnd(c, { runEndMs: T0 }).nextFireMs, null)
+  eq('rearm runEnd neverMatch -> null', R.recomputeRunEnd(c, { runEndMs: T0 }).nextFireMs, null)
 }
 { // rewind: re-arm from the (caller-clamped) anchor
   const c = cronCond('0 * * * *', 'UTC')
   const r = R.recomputeClockRewind(c, { nowMs: T0, anchorMs: T0 })
   eq('rearm rewind re-arm from clamped anchor', r.nextFireMs, T0 + H)
 }
-{ // rewind: no anchor → base = now
+{ // rewind: no anchor -> base = now
   const c = cronCond('0 * * * *', 'UTC')
   const r = R.recomputeClockRewind(c, { nowMs: T0, anchorMs: null })
   eq('rearm rewind no anchor base=now', r.nextFireMs, T0 + H)
 }
-{ // rewind: past anchor → grid points in the erased interval elapse once more (may land ≤ now: due on the next tick)
+{ // rewind: past anchor -> grid points in the erased interval elapse once more (may land <= now: due on the next tick)
   const c = cronCond('0 * * * *', 'UTC')
   const r = R.recomputeClockRewind(c, { nowMs: T0, anchorMs: T0 - H })
   eq('rearm rewind past anchor re-arms from the anchor', r.nextFireMs, T0)
 }
-{ // rewind: the function never re-clamps — it takes the anchor as given (the caller owns the clamp)
+{ // rewind: the function never re-clamps - it takes the anchor as given (the caller owns the clamp)
   const c = cronCond('*/10 * * * *', 'UTC')
   const r = R.recomputeClockRewind(c, { nowMs: T0, anchorMs: T0 + 11 * MIN })
   eq('rearm rewind no internal clamp (anchor taken as given)', r.nextFireMs, T0 + 20 * MIN)
@@ -765,21 +765,21 @@ function isoCond(instantMs, consumed = false) {
   c.nextFireMs = T0 + H
   eq('rearm rewind iso nextFire untouched', R.recomputeClockRewind(c, { nowMs: T0, anchorMs: T0 }).nextFireMs, T0 + H)
 }
-{ // rewind: neverMatch → terminal
+{ // rewind: neverMatch -> terminal
   const c = cronCond('0 0 31 2 *', 'UTC')
   c.neverMatch = true
-  eq('rearm rewind neverMatch → null', R.recomputeClockRewind(c, { nowMs: T0, anchorMs: null }).nextFireMs, null)
+  eq('rearm rewind neverMatch -> null', R.recomputeClockRewind(c, { nowMs: T0, anchorMs: null }).nextFireMs, null)
 }
 // a rewind that
 // happens while the process is stopped is invisible to the tick detector (the first tick only
 // establishes its baseline). The out-of-process twin of the tick's in-process rewind clamp is
 // the buildCalendars clamp at load: a future persisted anchor is clamped to the load now in
-// place (unconditional — the 1s threshold is per-tick churn avoidance only), the conditions
+// place (unconditional - the 1s threshold is per-tick churn avoidance only), the conditions
 // recompute from the new current time, and grid points in the erased interval re-present under
-// the rewound clock (re-presented wall-clock labels — new firings at new physical instants,
+// the rewound clock (re-presented wall-clock labels - new firings at new physical instants,
 // not duplicates of an execution). systemd twins: load-time future-stamp rejection
 // and the #6036 future-base clamp, both unconditional.
-{ // load: out-of-process rewind, post-clamp (anchor := now) → nf = nextMatch(now): the re-presented label of the erased interval arms in the future
+{ // load: out-of-process rewind, post-clamp (anchor := now) -> nf = nextMatch(now): the re-presented label of the erased interval arms in the future
   const c = cronCond('0 * * * *', 'UTC')
   const r = R.recomputeLoad(c, { nowMs: T0 + 30 * MIN, anchorMs: T0 + 30 * MIN, persistent: true })
   eq('post-clamp load re-arms the re-presented label in the future', r.nextFireMs, T0 + H)
@@ -793,28 +793,28 @@ function isoCond(instantMs, consumed = false) {
   ok('the clamp precedes the recompute inside the funnel', bc.indexOf('model.state.lastTriggerMs = nowMs') < bc.indexOf('recomputeLoad('))
   ok('the in-process tick branch documents its out-of-process twin (buildCalendars at load)', schedulerSrc.includes('The out-of-process twin = the buildCalendars clamp at load'))
 }
-{ // tzChange: cron, new next match still in the future → kept (re-armed from the anchor)
+{ // tzChange: cron, new next match still in the future -> kept (re-armed from the anchor)
   const c = cronCond('0 9 * * *', 'Asia/Shanghai')
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: Date.parse('2026-09-19T01:00:00Z') })
   eq('rearm tzChange future kept', r.nextFireMs, Date.parse('2026-09-20T01:00:00Z'))
 }
-{ // tzChange: cron, anchor beyond now → re-arm from the anchor (no spurious rebase to now)
+{ // tzChange: cron, anchor beyond now -> re-arm from the anchor (no spurious rebase to now)
   const c = cronCond('0 9 * * *', 'Asia/Shanghai')
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: Date.parse('2026-09-20T01:00:00Z') })
   eq('rearm tzChange anchor beyond now re-arms from anchor', r.nextFireMs, Date.parse('2026-09-21T01:00:00Z'))
 }
-{ // tzChange: cron, expired → one catch-up fire rebased to now (no missed persistence)
+{ // tzChange: cron, expired -> one catch-up fire rebased to now (no missed persistence)
   const c = cronCond('0 9 * * *', 'Asia/Shanghai')
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: Date.parse('2026-09-18T01:00:00Z') })
   eq('rearm tzChange expired rebase to now', r.nextFireMs, T0)
   eq('rearm tzChange no missed persistence', r.missed, undefined)
 }
-{ // tzChange: cron, no anchor → base = now
+{ // tzChange: cron, no anchor -> base = now
   const c = cronCond('0 9 * * *', 'Asia/Shanghai')
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: null })
   eq('rearm tzChange no anchor base=now', r.nextFireMs, Date.parse('2026-09-20T01:00:00Z'))
 }
-{ // tzChange: cron, no future match → neverMatch
+{ // tzChange: cron, no future match -> neverMatch
   const c = cronCond('0 0 31 2 *', 'Asia/Shanghai')
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: T0 })
   eq('rearm tzChange neverMatch', [r.nextFireMs, c.neverMatch], [null, true])
@@ -823,8 +823,8 @@ function naiveIsoCond(value, tz, consumed = false) {
   const cal = C.CalendarCondition.fromParsed(value, C.parseCalendarValue(value, tz), tz)
   return { cal, consumed, neverMatch: false, nextFireMs: null }
 }
-{ // F3 tzChange: naive ISO re-resolves the stored wall time under the new tz (systemd
-  // OnTimezoneChange=false: no cron/ISO exception) — wall 09:00 resolved in UTC (09:00Z)
+{ // tzChange: naive ISO re-resolves the stored wall time under the new tz (systemd
+  // OnTimezoneChange=false: no cron/ISO exception) - wall 09:00 resolved in UTC (09:00Z)
   // becomes 01:00Z when the zone switches to Asia/Shanghai
   const c = naiveIsoCond('2027-01-01T09:00:00', 'UTC')
   eq('rearm tzChange naive iso baseline instant (UTC)', c.cal.instantMs, Date.parse('2027-01-01T09:00:00Z'))
@@ -834,25 +834,25 @@ function naiveIsoCond(value, tz, consumed = false) {
   eq('rearm tzChange naive iso re-resolved under new tz', r.nextFireMs, Date.parse('2027-01-01T01:00:00Z'))
   eq('rearm tzChange naive iso instantMs stored back', c.cal.instantMs, Date.parse('2027-01-01T01:00:00Z'))
 }
-{ // tzChange: naive ISO re-resolves to the past → single catch-up fire rebased to now
+{ // tzChange: naive ISO re-resolves to the past -> single catch-up fire rebased to now
   const c = naiveIsoCond('2026-01-01T09:00:00', 'UTC')
   c.cal.tz = 'Asia/Shanghai'
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: null })
   eq('rearm tzChange naive iso past rebase to now', r.nextFireMs, T0)
   eq('rearm tzChange naive iso past instantMs re-resolved', c.cal.instantMs, Date.parse('2026-01-01T01:00:00Z'))
 }
-{ // F3 tzChange: zoned ISO (own offset) is never recomputed — regression guard
+{ // tzChange: zoned ISO (own offset) is never recomputed - regression guard
   const c = isoCond(Date.parse('2027-01-01T09:00:00Z'), false)
   eq('rearm tzChange zoned iso wallParts null', c.cal.wallParts, null)
   c.cal.tz = 'Asia/Shanghai'
   eq('rearm tzChange zoned iso instant unchanged', R.recomputeTzChange(c, { nowMs: T0, anchorMs: null }).nextFireMs, Date.parse('2027-01-01T09:00:00Z'))
 }
-{ // F3 tzChange: consumed naive ISO stays terminal under any tz change
+{ // tzChange: consumed naive ISO stays terminal under any tz change
   const c = naiveIsoCond('2027-01-01T09:00:00', 'UTC', true)
   c.cal.tz = 'Asia/Shanghai'
   eq('rearm tzChange consumed naive iso terminal', R.recomputeTzChange(c, { nowMs: T0, anchorMs: null }).nextFireMs, null)
 }
-{ // F3 tzChange: naive ISO wall time inside the new zone's DST gap → keep the previously
+{ // tzChange: naive ISO wall time inside the new zone's DST gap -> keep the previously
   // resolved absolute moment (deterministic fallback; 02:30 does not exist in NY on 2026-03-08)
   const c = naiveIsoCond('2026-03-08T02:30:00', 'UTC')
   c.nextFireMs = Date.parse('2026-03-08T02:30:00Z') // the armed pointer = the previously resolved instant
@@ -860,14 +860,14 @@ function naiveIsoCond(value, tz, consumed = false) {
   const r = R.recomputeTzChange(c, { nowMs: T0, anchorMs: null })
   eq('rearm tzChange dst gap keeps previously resolved instant', r.nextFireMs, Date.parse('2026-03-08T02:30:00Z'))
 }
-{ // applyFire: cron defer=false → re-arm from the actual elapse moment (the job anchor is advanced by the caller at the elapse site)
+{ // applyFire: cron defer=false -> re-arm from the actual elapse moment (the job anchor is advanced by the caller at the elapse site)
   const c = cronCond('* * * * *', 'UTC')
   c.nextFireMs = T0
   const r = R.applyFire(c, { defer: false, firedAtMs: T0 })
   eq('rearm applyFire cron re-arm from elapse', [r.firedAt, c.nextFireMs], [T0, T0 + MIN])
 }
-{ // applyFire: cron defer=true → suspended (re-armed from the run end at deactivation).
-  // regression: the suspended (transient) nextFireMs = null must NOT set neverMatch —
+{ // applyFire: cron defer=true -> suspended (re-armed from the run end at deactivation).
+  // regression: the suspended (transient) nextFireMs = null must NOT set neverMatch -
   // the old code conflated "suspended" with "never matches" and permanently killed a
   // defer=true cron job after its first fire (recomputeRunEnd bails on neverMatch, the
   // tick skips it, and the poisoned flag persists through restarts).
@@ -883,7 +883,7 @@ function naiveIsoCond(value, tz, consumed = false) {
   c.nextFireMs = T0
   R.applyFire(c, { defer: true, firedAtMs: T0 })
   const rr = R.recomputeRunEnd(c, { runEndMs: T0 + 7 * MIN })
-  eq('defer fire → run end re-arms the suspended cron from the run end', [rr.nextFireMs, c.neverMatch], [T0 + 8 * MIN, false])
+  eq('defer fire -> run end re-arms the suspended cron from the run end', [rr.nextFireMs, c.neverMatch], [T0 + 8 * MIN, false])
 }
 { // a genuine neverMatch condition stays terminal through a defer fire (the
   // defer branch must not clear the flag either)
@@ -896,17 +896,17 @@ function naiveIsoCond(value, tz, consumed = false) {
   const r = R.applyFire(c, { defer: false, firedAtMs: T0 })
   eq('rearm applyFire iso consumed', [r.firedAt, c.consumed, c.nextFireMs], [T0, true, null])
 }
-{ // applyFire: invariant — re-arm from the actual trigger moment, strictly in the future (structurally no catch-up chain)
+{ // applyFire: invariant - re-arm from the actual trigger moment, strictly in the future (structurally no catch-up chain)
   const c = cronCond('*/5 * * * *', 'UTC')
   c.nextFireMs = T0
   R.applyFire(c, { defer: false, firedAtMs: T0 })
   ok('rearm applyFire re-arm strictly future', c.nextFireMs !== null && c.nextFireMs > T0, `nextFire=${c.nextFireMs}`)
 }
 {
-  // consume semantics — the job-level anchor is advanced at
+  // consume semantics - the job-level anchor is advanced at
   // every on-calendar elapse site in the tick (a fire OR an overlap=skip consume), and the
   // anchor is passed explicitly to every recompute function; overlap=skip consumes a due
-  // trigger in place (no catch-up fire after the run ends — a run longer than the interval
+  // trigger in place (no catch-up fire after the run ends - a run longer than the interval
   // swallows grid points; the cost is accepted and expected).
   const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
   const stateSrc = readFileSync(path.join(PKG, 'src/state.ts'), 'utf8')
@@ -920,14 +920,14 @@ function naiveIsoCond(value, tz, consumed = false) {
   ok('the state contract carries the job-level anchor and no per-condition anchor', stateSrc.includes("'lastTriggerMs'") && !stateSrc.includes('lastTriggerMs: number | null\n  [key: string]: unknown'))
   ok('the status detail reports the job-level last on-calendar elapse', schedulerSrc.includes('last on-calendar elapse'))
 }
-// ── state model ────────────────────────────────────────────────
+// -- state model ------------------------------------------------
 {
   const s = S.freshState('demo')
   eq('state fresh shape (no missed)', s, { schemaVersion: 1, jobId: 'demo', lastActivationMs: null, lastTriggerMs: null, calendars: {}, runs: [] })
   eq('state fresh passes shape check', S.checkStateShape(s), true)
 }
 {
-  // full-shape validation — every field type is checked, not just top-level key presence.
+  // full-shape validation - every field type is checked, not just top-level key presence.
   const bad = [
     null,
     [],
@@ -950,7 +950,7 @@ function naiveIsoCond(value, tz, consumed = false) {
   ]
   for (const b of bad) ok(`state shape rejects ${JSON.stringify(b) ?? 'null'}`, S.checkStateShape(b) === false)
   // good: fully-populated calendar entry; in-flight run record (explicit nulls as persisted by the runner);
-  // settled run record with optional fields omitted (missing ≠ corrupt); unknown extra key tolerated.
+  // settled run record with optional fields omitted (missing != corrupt); unknown extra key tolerated.
   const good = {
     schemaVersion: 1, jobId: 'x', lastActivationMs: 5, lastTriggerMs: 3,
     calendars: { a: { value: 'a', kind: 'cron', neverMatch: false, consumed: false, nextFireMs: null } },
@@ -974,17 +974,17 @@ function naiveIsoCond(value, tz, consumed = false) {
     // bad JSON
     writeFileSync(file, '{oops')
     const r1 = await S.loadState(file)
-    ok('state loadState bad JSON → corrupt', r1.state === null && r1.corrupt === true)
+    ok('state loadState bad JSON -> corrupt', r1.state === null && r1.corrupt === true)
     // shape mismatch
     writeFileSync(file, JSON.stringify({ schemaVersion: 99 }), { flag: 'w' })
     const r2 = await S.loadState(file)
-    ok('state loadState shape mismatch → corrupt', r2.state === null && r2.corrupt === true)
+    ok('state loadState shape mismatch -> corrupt', r2.state === null && r2.corrupt === true)
     // normal
     const fresh = S.freshState('demo')
     writeFileSync(file, JSON.stringify(fresh, null, 2) + '\n', { flag: 'w' })
     const r3 = await S.loadState(file)
     ok('state loadState normal', r3.state !== null && r3.corrupt === false && r3.state.jobId === 'demo')
-    // legacy state (extra missed key) → tolerated + normalized away on load
+    // legacy state (extra missed key) -> tolerated + normalized away on load
     const legacy = { schemaVersion: 1, jobId: 'demo', lastActivationMs: 7, calendars: {}, missed: { lastMissedAtMs: 1, count: 3 }, runs: [] }
     writeFileSync(file, JSON.stringify(legacy, null, 2) + '\n', { flag: 'w' })
     const r4 = await S.loadState(file)
@@ -1014,11 +1014,11 @@ function naiveIsoCond(value, tz, consumed = false) {
   eq('state truncateSummary non-string', S.truncateSummary(42), '')
 }
 
-// ── event envelope nesting + croner year cap ──
+// -- event envelope nesting + croner year cap --
 // pinned dsh-session 0.1.5-rc.3 nests event payloads under `data` (append(type, data)
-// → { type, seq, time, data }); dsh-agent-loop emits turn/end → data:{ turn, reason } and
-// assistant/message → data:{ turn, step, message }. Settlement read sites must therefore read
-// event.data.reason / event.data.message — the top-level read sites (pre-envelope) silently
+// -> { type, seq, time, data }); dsh-agent-loop emits turn/end -> data:{ turn, reason } and
+// assistant/message -> data:{ turn, step, message }. Settlement read sites must therefore read
+// event.data.reason / event.data.message - the top-level read sites (pre-envelope) silently
 // mis-settled every successfully completed run as failed/turn_error with an empty summary
 // (no earlier gate drove the successful-settlement path).
 {
@@ -1033,7 +1033,7 @@ function naiveIsoCond(value, tz, consumed = false) {
   ok('stale ~400-year sweep claim removed', !cronSrc.includes('400-year'))
 }
 // behavior guard: drive the real startRun settlement chain with a stub agent/session
-// that emits events in the REAL dsh-session envelope shape — first gate-level coverage of the
+// that emits events in the REAL dsh-session envelope shape - first gate-level coverage of the
 // successful-settlement path. startRun pulls only pure functions from dsh-llm /
 // dsh-sandbox-policy; no live framework service is started.
 {
@@ -1081,7 +1081,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         timeout: () => () => {}, // probe: the create/runtimeMax deadlines never fire
         // ctx.get only exists when at least one soft-accessor service is mocked (a
         // default-model source and/or the preset service): the no-service cases exercise
-        // the path where the host provides neither accessor-based service — an explicit
+        // the path where the host provides neither accessor-based service - an explicit
         // route must work even without it (a direct property read of an undeclared
         // service crashes on such hosts); a preset-less job must work even without the
         // preset service, degrading to the baseline composition.
@@ -1114,26 +1114,26 @@ function naiveIsoCond(value, tz, consumed = false) {
     const endEvent = (turn, reason) => ({ type: 'turn/end', seq: turn * 10 + 9, time: 0, data: { turn, reason } })
 
     let c
-    // completed turn → finished/null + last assistant text as summary (the event-envelope regression itself)
+    // completed turn -> finished/null + last assistant text as summary (the event-envelope regression itself)
     c = await settleCase([msgEvent(0, 0, TEXT), endEvent(0, { kind: 'completed' })])
     eq('settle: startRun ok (completed)', c.res.ok, true)
-    eq('settle: completed → finished/null', [c.outcome.status, c.outcome.cause], ['finished', null])
+    eq('settle: completed -> finished/null', [c.outcome.status, c.outcome.cause], ['finished', null])
     eq('settle: completed summary = last assistant text', c.outcome.summary, TEXT)
-    // error reason → failed/turn_error (summary still extracted from the assistant text)
+    // error reason -> failed/turn_error (summary still extracted from the assistant text)
     c = await settleCase([msgEvent(0, 0, 'partial'), endEvent(0, { kind: 'error', error: { message: 'boom', code: 'E' } })])
-    eq('settle: error → failed/turn_error', [c.outcome.status, c.outcome.cause], ['failed', 'turn_error'])
+    eq('settle: error -> failed/turn_error', [c.outcome.status, c.outcome.cause], ['failed', 'turn_error'])
     eq('settle: error turn still extracts summary', c.outcome.summary, 'partial')
     eq('settle: turn_error surfaces the framework error message', c.outcome.error, 'boom')
-    // aborted without a pending cause → failed/cancelled
+    // aborted without a pending cause -> failed/cancelled
     c = await settleCase([endEvent(0, { kind: 'aborted', reason: { kind: 'user' } })])
-    eq('settle: aborted → failed/cancelled', [c.outcome.status, c.outcome.cause], ['failed', 'cancelled'])
+    eq('settle: aborted -> failed/cancelled', [c.outcome.status, c.outcome.cause], ['failed', 'cancelled'])
     // pendingCause priority: a recorded timeout wins over the (completed) turn/end reason
     c = await settleCase([endEvent(0, { kind: 'completed' })], { pendingCause: 'timeout' })
     eq('settle: pendingCause=timeout beats completed reason', [c.outcome.status, c.outcome.cause], ['failed', 'timeout'])
-    // max-tokens → finished/null, no assistant text → summary ''
+    // max-tokens -> finished/null, no assistant text -> summary ''
     c = await settleCase([endEvent(0, { kind: 'max-tokens' })])
-    eq('settle: max-tokens → finished/null', [c.outcome.status, c.outcome.cause], ['finished', null])
-    eq('settle: no assistant text → summary ""', c.outcome.summary, '')
+    eq('settle: max-tokens -> finished/null', [c.outcome.status, c.outcome.cause], ['finished', null])
+    eq('settle: no assistant text -> summary ""', c.outcome.summary, '')
     // the last non-empty assistant text wins
     c = await settleCase([msgEvent(0, 0, 'first'), msgEvent(0, 1, 'second'), endEvent(0, { kind: 'completed' })])
     eq('settle: last assistant text wins', c.outcome.summary, 'second')
@@ -1145,45 +1145,45 @@ function naiveIsoCond(value, tz, consumed = false) {
     // "provider/model" splits at the first slash and never touches a host service (a
     // direct property read of an undeclared service crashes even explicit routes on hosts
     // lacking the service). A bare model id or an absent model rides the deployment's
-    // default selection from readDefaultModelSelection — three soft sources in order: the
+    // default selection from readDefaultModelSelection - three soft sources in order: the
     // agent-default-model service (ctx.get), the settings service's section under the
     // default-model namespace, the raw settings.yaml document at the harness home; no
-    // source → agentOptions omitted and the turn/end error message surfaces in the run
+    // source -> agentOptions omitted and the turn/end error message surfaces in the run
     // record.
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'ninfer/qwen3.8-27b' } })
-    eq('settle: "provider/model" → explicit pair, NO host source needed', c.createdOpts.agentOptions, { provider: 'ninfer', model: 'qwen3.8-27b' })
+    eq('settle: "provider/model" -> explicit pair, NO host source needed', c.createdOpts.agentOptions, { provider: 'ninfer', model: 'qwen3.8-27b' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'p/a/b' } })
     eq('settle: "p/a/b" splits at the FIRST slash', c.createdOpts.agentOptions, { provider: 'p', model: 'a/b' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'bare-model' } })
-    eq('settle: bare model, no default source → model only', c.createdOpts.agentOptions, { model: 'bare-model' })
+    eq('settle: bare model, no default source -> model only', c.createdOpts.agentOptions, { model: 'bare-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'bare-model' }, defaultModel: { currentSelection: () => ({ provider: 'dep', model: 'dep-model' }) } })
-    eq('settle: bare model + default service → default provider', c.createdOpts.agentOptions, { provider: 'dep', model: 'bare-model' })
+    eq('settle: bare model + default service -> default provider', c.createdOpts.agentOptions, { provider: 'dep', model: 'bare-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'bare-model' }, defaultModel: { currentSelection: () => ({ provider: 'dep', model: 'dep-model' }) }, settingsSection: { provider: 'sett', model: 'sett-model' } })
     eq('settle: service wins over the settings section', c.createdOpts.agentOptions, { provider: 'dep', model: 'bare-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'bare-model' }, settingsSection: { provider: 'sett', model: 'sett-model' } })
-    eq('settle: bare model, service absent → settings-section provider', c.createdOpts.agentOptions, { provider: 'sett', model: 'bare-model' })
+    eq('settle: bare model, service absent -> settings-section provider', c.createdOpts.agentOptions, { provider: 'sett', model: 'bare-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { model: 'bare-model' }, settingsSection: { provider: 'sett' } })
-    eq('settle: malformed settings section (model missing) → model only', c.createdOpts.agentOptions, { model: 'bare-model' })
+    eq('settle: malformed settings section (model missing) -> model only', c.createdOpts.agentOptions, { model: 'bare-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { defaultModel: { currentSelection: () => ({ provider: 'dep', model: 'dep-model' }) } })
-    eq('settle: no model + default service → default selection', c.createdOpts.agentOptions, { provider: 'dep', model: 'dep-model' })
+    eq('settle: no model + default service -> default selection', c.createdOpts.agentOptions, { provider: 'dep', model: 'dep-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { settingsSection: { provider: 'sett', model: 'sett-model' } })
-    eq('settle: no model, service absent → settings-section selection', c.createdOpts.agentOptions, { provider: 'sett', model: 'sett-model' })
+    eq('settle: no model, service absent -> settings-section selection', c.createdOpts.agentOptions, { provider: 'sett', model: 'sett-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { settingsYaml: 'agent-default-model:\n  provider: filedep\n  model: file-model\n' })
-    eq('settle: no model, no services → raw settings.yaml selection', c.createdOpts.agentOptions, { provider: 'filedep', model: 'file-model' })
+    eq('settle: no model, no services -> raw settings.yaml selection', c.createdOpts.agentOptions, { provider: 'filedep', model: 'file-model' })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { settingsYaml: 'just a string document' })
-    eq('settle: unparseable/foreign settings.yaml → agentOptions absent', c.createdOpts.agentOptions, undefined)
+    eq('settle: unparseable/foreign settings.yaml -> agentOptions absent', c.createdOpts.agentOptions, undefined)
     c = await settleCase([endEvent(0, { kind: 'completed' })])
-    eq('settle: no model, no default source → agentOptions absent', c.createdOpts.agentOptions, undefined)
-    // error reason without a message payload → error stays null (no spurious text)
+    eq('settle: no model, no default source -> agentOptions absent', c.createdOpts.agentOptions, undefined)
+    // error reason without a message payload -> error stays null (no spurious text)
     c = await settleCase([endEvent(0, { kind: 'error', error: { code: 'E' } })])
-    eq('settle: error reason without message → error null', c.outcome.error, null)
-    // unknown (string) reason → generic failed/turn_error, error stays null
+    eq('settle: error reason without message -> error null', c.outcome.error, null)
+    // unknown (string) reason -> generic failed/turn_error, error stays null
     c = await settleCase([endEvent(0, 'mystery')])
-    eq('settle: string reason → failed/turn_error, error null', [c.outcome.status, c.outcome.cause, c.outcome.error], ['failed', 'turn_error', null])
+    eq('settle: string reason -> failed/turn_error, error null', [c.outcome.status, c.outcome.cause, c.outcome.error], ['failed', 'turn_error', null])
     // agent-plane composition
     // through the host's agent preset service (structural ctx.get accessor + the create
     // call's setup hook). A job that NAMES a preset resolves strictly (resolveMountable;
-    // absent service or unresolvable/broken preset → create_failed, no session created —
+    // absent service or unresolvable/broken preset -> create_failed, no session created -
     // a job file is declarative config). A job WITHOUT a preset mounts the deployment
     // default preset; an absent service or an unavailable default degrades to the
     // baseline composition (warn). Settled run sessions are still disposed by the runner
@@ -1208,34 +1208,34 @@ function naiveIsoCond(value, tz, consumed = false) {
     }
     let pm = presetMock('qwen-standard')
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { preset: 'qwen-standard' }, presets: pm.svc })
-    eq('preset: named preset → create ok', c.res.ok, true)
-    eq('preset: named preset → meta.agentPreset = resolved id', c.createdOpts.meta.agentPreset, 'qwen-standard')
-    ok('preset: named preset → create carries a setup hook', typeof c.createdOpts.setup === 'function')
+    eq('preset: named preset -> create ok', c.res.ok, true)
+    eq('preset: named preset -> meta.agentPreset = resolved id', c.createdOpts.meta.agentPreset, 'qwen-standard')
+    ok('preset: named preset -> create carries a setup hook', typeof c.createdOpts.setup === 'function')
     const namedSetupResult = await c.createdOpts.setup({})
     eq('preset: setup hook mounts the resolved preset', pm.mounted, ['qwen-standard'])
     ok('preset: setup returns void (agent loop calls ?.commit() on the result; a leaked mount record would crash create)', namedSetupResult === undefined)
     pm = presetMock('qwen-standard')
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { preset: 'nope' }, presets: pm.svc })
-    ok('preset: unknown preset → create_failed, no session created', c.res.ok === false && c.createdOpts === null)
-    ok('preset: unknown preset → error names the preset', String(c.res.error).includes('preset "nope" is unavailable'))
+    ok('preset: unknown preset -> create_failed, no session created', c.res.ok === false && c.createdOpts === null)
+    ok('preset: unknown preset -> error names the preset', String(c.res.error).includes('preset "nope" is unavailable'))
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { preset: 'qwen-standard' } })
-    ok('preset: named preset + absent service → create_failed', c.res.ok === false && String(c.res.error).includes('no agent preset service'))
+    ok('preset: named preset + absent service -> create_failed', c.res.ok === false && String(c.res.error).includes('no agent preset service'))
     pm = presetMock('qwen-standard', {}, { broken: true })
     c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { preset: 'qwen-standard' }, presets: pm.svc })
-    ok('preset: broken preset (resolveMountable rejects) → create_failed', c.res.ok === false && String(c.res.error).includes('unavailable'))
+    ok('preset: broken preset (resolveMountable rejects) -> create_failed', c.res.ok === false && String(c.res.error).includes('unavailable'))
     pm = presetMock('qwen-standard')
     c = await settleCase([endEvent(0, { kind: 'completed' })], { presets: pm.svc })
-    eq('default: preset-less job + service → default preset mounted', [c.res.ok, c.createdOpts.meta.agentPreset], [true, 'qwen-standard'])
-    ok('default: preset-less job → setup hook present', typeof c.createdOpts.setup === 'function')
+    eq('default: preset-less job + service -> default preset mounted', [c.res.ok, c.createdOpts.meta.agentPreset], [true, 'qwen-standard'])
+    ok('default: preset-less job -> setup hook present', typeof c.createdOpts.setup === 'function')
     const defaultSetupResult = await c.createdOpts.setup({})
     ok('default: setup returns void (leaked mount record guard)', defaultSetupResult === undefined)
     pm = presetMock(undefined)
     c = await settleCase([endEvent(0, { kind: 'completed' })], { presets: pm.svc })
     ok('default: unavailable default degrades to baseline (run ok, no setup, no agentPreset)', c.res.ok === true && c.createdOpts.setup === undefined && c.createdOpts.meta.agentPreset === undefined)
     c = await settleCase([endEvent(0, { kind: 'completed' })])
-    ok('default: preset-less job + no service → baseline composition (run ok)', c.res.ok === true && c.createdOpts.setup === undefined)
+    ok('default: preset-less job + no service -> baseline composition (run ok)', c.res.ok === true && c.createdOpts.setup === undefined)
     // disposal guard: settled run sessions are disposed by the runner (plugin lifecycle
-    // unchanged) — the list-removal on dispose is a framework defect, so the plugin carries
+    // unchanged) - the list-removal on dispose is a framework defect, so the plugin carries
     // no retention registry that would bend its semantics to compensate.
     const runnerSrc = readFileSync(path.join(PKG, 'src/runner.ts'), 'utf8')
     const schedulerSrc = readFileSync(path.join(PKG, 'src/scheduler.ts'), 'utf8')
@@ -1258,7 +1258,7 @@ function naiveIsoCond(value, tz, consumed = false) {
 
 {
   // the plugin's static inject declaration
-  // must name every ctx service the constructor reads — agents (runner) + timer (tick) +
+  // must name every ctx service the constructor reads - agents (runner) + timer (tick) +
   // tools (tool registry) + skills (skill provider) + systemPrompt (prompt section). On
   // cordis 4.0.2 the proxy resolves undeclared reads via the fiber store lookup before the
   // inject check, so an undeclared name only surfaces as a cryptic "without inject" error on
@@ -1275,7 +1275,7 @@ function naiveIsoCond(value, tz, consumed = false) {
   // dshHomePath is the framework's
   // harness-home path resolver (dsh-app-boot provides it on the root context at boot). The
   // constructor reads ctx.dshHomePath for the default jobsDir discovery fallback, so the
-  // inject declaration must name it (6th service) — a declared-missing service parks the
+  // inject declaration must name it (6th service) - a declared-missing service parks the
   // plugin fiber rather than throwing, so the declaration is consistent with the read site.
   ok("inject declares dshHomePath (ctx.dshHomePath read site in index.ts)", declared.includes("'dshHomePath'") && indexSrc.includes('resolveJobsDir(config, logger, ctx.dshHomePath)'))
   ok("index.ts augments cordis Context with the optional dshHomePath service", indexSrc.includes("declare module '@deepseek-ai/cordis'") && indexSrc.includes('dshHomePath?:'))
@@ -1283,7 +1283,7 @@ function naiveIsoCond(value, tz, consumed = false) {
 
 {
   // discoverProfileDir finds the
-  // active profile through the framework's own conventions — profiles live under
+  // active profile through the framework's own conventions - profiles live under
   // <dshHome>/profiles/<name> and the framework mints each profile's package.json name as
   // `dsh-profile-<name>` (dsh-app-boot). The unique candidate wins; zero or multiple is
   // ambiguity (null), and a directory renamed away from its minted name no longer matches.
@@ -1296,42 +1296,42 @@ function naiveIsoCond(value, tz, consumed = false) {
     mkdirSync(path.join(profiles, 'node_modules'), { recursive: true })
     mkdirSync(path.join(profiles, '.git'), { recursive: true })
 
-    // the one real framework-minted profile → unique candidate
+    // the one real framework-minted profile -> unique candidate
     const web = path.join(profiles, 'web')
     mkdirSync(web, { recursive: true })
     writeFileSync(path.join(web, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', version: '0.0.0' }))
 
     // decoys that must NOT count as candidates
     mkdirSync(path.join(profiles, 'renamed'), { recursive: true })
-    writeFileSync(path.join(profiles, 'renamed', 'package.json'), JSON.stringify({ name: 'dsh-profile-web' })) // suffix ≠ dir name
+    writeFileSync(path.join(profiles, 'renamed', 'package.json'), JSON.stringify({ name: 'dsh-profile-web' })) // suffix != dir name
     mkdirSync(path.join(profiles, 'foreign'), { recursive: true })
     writeFileSync(path.join(profiles, 'foreign', 'package.json'), JSON.stringify({ name: 'not-a-profile' })) // no dsh-profile- prefix
     mkdirSync(path.join(profiles, 'no-pkg'), { recursive: true }) // missing package.json
 
     eq('discoverProfileDir: unique minted profile wins', discoverProfileDir(dshHomePath), web)
 
-    // a second valid minted profile → multiple candidates → ambiguity (null)
+    // a second valid minted profile -> multiple candidates -> ambiguity (null)
     const web2 = path.join(profiles, 'web2')
     mkdirSync(web2, { recursive: true })
     writeFileSync(path.join(web2, 'package.json'), JSON.stringify({ name: 'dsh-profile-web2', version: '0.0.0' }))
-    eq('discoverProfileDir: multiple minted profiles → null (ambiguity)', discoverProfileDir(dshHomePath), null)
+    eq('discoverProfileDir: multiple minted profiles -> null (ambiguity)', discoverProfileDir(dshHomePath), null)
 
-    // an empty profiles root → zero candidates → null
+    // an empty profiles root -> zero candidates -> null
     const emptyHome = mkdtempSync(path.join(tmpdir(), 'dsh-timer-b3-empty-'))
     mkdirSync(path.join(emptyHome, 'profiles'), { recursive: true })
-    eq('discoverProfileDir: empty profiles root → null', discoverProfileDir((...segs) => path.join(emptyHome, ...segs)), null)
+    eq('discoverProfileDir: empty profiles root -> null', discoverProfileDir((...segs) => path.join(emptyHome, ...segs)), null)
     rmSync(emptyHome, { recursive: true, force: true })
 
-    // a harness home without a profiles/ root → null
+    // a harness home without a profiles/ root -> null
     const bareHome = mkdtempSync(path.join(tmpdir(), 'dsh-timer-b3-bare-'))
-    eq('discoverProfileDir: no profiles root → null', discoverProfileDir((...segs) => path.join(bareHome, ...segs)), null)
+    eq('discoverProfileDir: no profiles root -> null', discoverProfileDir((...segs) => path.join(bareHome, ...segs)), null)
     rmSync(bareHome, { recursive: true, force: true })
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
 
   {
-    // resolveJobsDir candidate chain — the harness-home discovery is the third
+    // resolveJobsDir candidate chain - the harness-home discovery is the third
     // fallback after the explicit candidates and the install-root walk-up. A unique
     // discovered profile yields <profileDir>/timers; ambiguity throws; a host without
     // dshHomePath (undefined) with no walk-up root also throws.
@@ -1342,7 +1342,7 @@ function naiveIsoCond(value, tz, consumed = false) {
       return threw
     }
 
-    // unique profile via dshHomePath → <profileDir>/timers (walk-up of PKG_DIR is null in the
+    // unique profile via dshHomePath -> <profileDir>/timers (walk-up of PKG_DIR is null in the
     // selftest checkout, so the discovery branch is exercised)
     const home2 = mkdtempSync(path.join(tmpdir(), 'dsh-timer-b3-jobs-'))
     try {
@@ -1351,16 +1351,16 @@ function naiveIsoCond(value, tz, consumed = false) {
       mkdirSync(web, { recursive: true })
       writeFileSync(path.join(web, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', version: '0.0.0' }))
       const dshHomePath = (...segs) => path.join(home2, ...segs)
-      eq('resolveJobsDir: discovered unique profile → <profile>/timers',
+      eq('resolveJobsDir: discovered unique profile -> <profile>/timers',
         resolveJobsDir({}, silentLogger, dshHomePath), path.join(web, 'timers'))
       ok('resolveJobsDir: discovered default dir was created', (await import('node:fs')).existsSync(path.join(web, 'timers')))
 
-      // ambiguity (two minted profiles) + no explicit value → throw
+      // ambiguity (two minted profiles) + no explicit value -> throw
       const web2 = path.join(profiles, 'web2')
       mkdirSync(web2, { recursive: true })
       writeFileSync(path.join(web2, 'package.json'), JSON.stringify({ name: 'dsh-profile-web2', version: '0.0.0' }))
       const amb = throwIf(() => resolveJobsDir({}, silentLogger, dshHomePath))
-      ok('resolveJobsDir: ambiguous discovery → throw', amb !== null && String(amb.message).includes('cannot determine jobsDir'))
+      ok('resolveJobsDir: ambiguous discovery -> throw', amb !== null && String(amb.message).includes('cannot determine jobsDir'))
     } finally {
       rmSync(home2, { recursive: true, force: true })
     }
@@ -1374,9 +1374,9 @@ function naiveIsoCond(value, tz, consumed = false) {
       rmSync(expDir, { recursive: true, force: true })
     }
 
-    // no dshHomePath service (undefined) and no install-root walk-up → throw (dev checkout)
+    // no dshHomePath service (undefined) and no install-root walk-up -> throw (dev checkout)
     const noService = throwIf(() => resolveJobsDir({}, silentLogger, undefined))
-    ok('resolveJobsDir: no service + no walk-up → throw', noService !== null && String(noService.message).includes('does not provide the dshHomePath service'))
+    ok('resolveJobsDir: no service + no walk-up -> throw', noService !== null && String(noService.message).includes('does not provide the dshHomePath service'))
   }
 }
 
@@ -1450,7 +1450,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     const r3 = await sched.addJob('p3', specOf({ policy: 'danger-full-access' }), callerOf({ cwd: root, approval: okSeam }))
     ok('add: an approved escalation creates the job', typeof r3 === 'string' && r3.startsWith('added job p3'))
     ok('add: the approval question routes through the timer tool with a human-facing reason', okSeam.calls.length === 1 && okSeam.calls[0].toolName === 'timer' && okSeam.calls[0].displayReason.en.includes('p3') && okSeam.calls[0].displayReason.en.includes('danger-full-access') && okSeam.calls[0].reason.includes('timer add'))
-    // B4: an omitted policy resolves to the deployment default — the gap still counts
+    // B4: an omitted policy resolves to the deployment default - the gap still counts
     const e4 = await errOf(sched.addJob('p4', specOf({}), callerOf({ policy: 'read-only', cwd: root, approval: seam('rejected') })))
     ok('add: an omitted policy (deployment default) still counts as the job level', e4 !== null && e4.includes(`above this session's policy 'read-only'`))
     // B5: an explicit run.cwd outside the caller's own cwd is denied (no gap, no escalation)
@@ -1520,7 +1520,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     ok('delete: a denied delete leaves the job file untouched', existsSync(path.join(jobsDir, 'p14.json')) && readFileSync(path.join(jobsDir, 'p14.json'), 'utf8') === before14)
     await sched.deleteJob('p14', callerOf({ policy: 'read-only', approval: seam('allowed-once') }))
     ok('delete: an approved delete removes config and state', !existsSync(path.join(jobsDir, 'p14.json')) && !existsSync(path.join(jobsDir, 'state', 'p14.json')))
-    // B15: a host without the policy service has nothing to enforce — the checks skip
+    // B15: a host without the policy service has nothing to enforce - the checks skip
     const bareWorld = {}
     const bareCaller = callerOf({ world: false, policy: null, approval: null })
     await new TimerScheduler({ ctx: bareWorld, logger: quietLg, jobsDir }).addJob('p15', specOf({ policy: 'danger-full-access', cwd: outsideDir }), bareCaller)
@@ -1529,7 +1529,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     const e16 = await errOf(sched.addJob('p16', specOf({ policy: 'danger-full-access' }), callerOf({ policy: 'read-only', cwd: root, agent: false, approval: seam('allowed-once') })))
     ok('add: an agent-less caller cannot escalate (no routing target)', e16 !== null && e16.includes('no agent context to route approval through'))
     // B17: the tool handler derives the caller from a cordis-shaped context (a soft get
-    // accessor only — no declared-inject service properties, the shape of a live runtime
+    // accessor only - no declared-inject service properties, the shape of a live runtime
     // fiber): the policy gap is detected and routed to the approval channel even though
     // the context object carries no sandboxPolicy property.
     const { registerTool } = await import(path.join(PKG, 'lib/tool.js'))
@@ -1560,7 +1560,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     const r19 = await toolDef.execute({ verb: 'add', id: 'pt3', spec: specOf({ policy: 'danger-full-access' }) }, execOf(root))
     ok('tool: a context without a policy world skips the check without crashing', typeof r19 === 'string' && r19.startsWith('added job pt3'))
 
-    // B20-B33: the run-root scope rule — a job's effective run root is its control
+    // B20-B33: the run-root scope rule - a job's effective run root is its control
     // domain: a same-level session outside that domain cannot manage the job (disable,
     // enable, cancel, run, update, delete) without the approval channel, while a job's
     // own run-root session manages itself freely and a full-access session is exempt
@@ -1585,7 +1585,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     ok('enable: cross-scope routes through the approval channel', e21 !== null && e21.includes('the user rejected the approval'))
     await sched.setEnabled('p21', true, callerOf({ cwd: root, approval: seam('allowed-once') }))
     ok('enable: an approved cross-scope enable re-enables the job', JSON.parse(readFileSync(p21File, 'utf8')).enable === true)
-    // B22: the cancel gate is uniform — it applies even when no run is in progress
+    // B22: the cancel gate is uniform - it applies even when no run is in progress
     const e22 = await errOf(sched.cancelJob('p21', callerOf({ cwd: root, approval: seam('rejected') })))
     ok('cancel: cross-scope applies even with no in-progress runs (uniform gate)', e22 !== null && e22.includes('the user rejected the approval'))
     // B23: a same-level session outside the run root cannot manually run it
@@ -1606,7 +1606,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     ok('scope: a job run-root session manages its own job without escalation', typeof r26 === 'string' && r26.startsWith('disabled job p21'))
     const e26b = await errOf(sched.manualRun('p20', selfCaller))
     ok('scope: the same session cannot reach a sibling job run root (fail closed)', e26b !== null && e26b.includes('no approval channel is available'))
-    // B27: a caller without a known cwd cannot be verified in scope — fail closed
+    // B27: a caller without a known cwd cannot be verified in scope - fail closed
     const e27 = await errOf(sched.setEnabled('p20', false, callerOf({ policy: 'workspace-write', cwd: null, approval: null })))
     ok('scope: a caller with no cwd fails closed', e27 !== null && e27.includes('no approval channel is available'))
     // B28: a full-access caller is exempt from both axes (any cwd, no approval)
@@ -1617,7 +1617,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     const bothSeam = seam('rejected')
     const e29 = await errOf(sched.setEnabled('p21', false, callerOf({ policy: 'read-only', cwd: root, approval: bothSeam })))
     ok('escalation: one approval covers the level gap and the scope breach together', e29 !== null && e29.includes(`above this session's policy 'read-only'`) && e29.includes(`outside this session's workspace root`) && bothSeam.calls.length === 1)
-    // B30: add carries no scope axis — an explicit run cwd outside the session root is
+    // B30: add carries no scope axis - an explicit run cwd outside the session root is
     // denied locally (no approval routing)
     const e30 = await errOf(sched.addJob('p30', specOf({ cwd: outsideDir }), callerOf({ cwd: root, approval: null })))
     ok('add: a run cwd outside the session root is denied locally', e30 !== null && e30.includes(`is outside this session's workspace root`) && !existsSync(path.join(jobsDir, 'p30.json')))
@@ -1635,7 +1635,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     ok('delete: an unparseable on-disk spec fails closed on both axes', e33 !== null && e33.includes('the user rejected the approval') && e33.includes('undetermined run root'))
     ok('delete: a denied delete leaves the broken file untouched', existsSync(path.join(jobsDir, 'p33.json')))
 
-    // R1..R9: run-cwd inheritance — the plugin ships no host-absolute run path: an add that
+    // R1..R9: run-cwd inheritance - the plugin ships no host-absolute run path: an add that
     // omits run.cwd inherits the creating session's workspace (materialized into the job
     // file), a creating session without a cwd is refused locally (set run.cwd explicitly),
     // and jobs whose run root cannot be determined fail closed on management and on run
@@ -1652,11 +1652,11 @@ function naiveIsoCond(value, tz, consumed = false) {
     const vr2b = await errOf(sched.setEnabled('r1', true, callerOf({ cwd: outsideDir, approval: null })))
     ok('scope: a sibling scope cannot manage the inherited job (fail closed)', vr2b !== null && vr2b.includes('no approval channel is available'))
     await sched.setEnabled('r1', true, wsCaller)
-    // R3: a caller without a cwd — the add is refused locally with the actionable
+    // R3: a caller without a cwd - the add is refused locally with the actionable
     // remedy (no approval routing; no deployment default run root exists)
     const vr3 = await errOf(sched.addJob('r3', specOf({}), callerOf({ cwd: null, approval: null })))
     ok('add: a caller without a cwd is refused locally (set run.cwd explicitly)', vr3 !== null && vr3.includes('set run.cwd explicitly') && !existsSync(path.join(jobsDir, 'r3.json')))
-    // R6: a legacy job file that omits run.cwd has an undetermined run root — both
+    // R6: a legacy job file that omits run.cwd has an undetermined run root - both
     // axes fail closed through approval
     writeFileSync(path.join(jobsDir, 'r6.json'), JSON.stringify(specOf({ prompt: 'legacy' })))
     await sched.reload()
@@ -1678,18 +1678,18 @@ function naiveIsoCond(value, tz, consumed = false) {
     // R9: unit shape of the shared derivation (one rule feeds runner and privilege)
     const { runRootOfSpec, inheritRunRoot } = await import(path.join(PKG, 'lib/privilege.js'))
     eq('runRootOfSpec: an explicit cwd is the run root', runRootOfSpec({ run: { prompt: 'x', cwd: '/a/b/' } }), '/a/b/')
-    eq('runRootOfSpec: an omitted cwd is undetermined (legacy file) → null', runRootOfSpec({ run: { prompt: 'x' } }), null)
+    eq('runRootOfSpec: an omitted cwd is undetermined (legacy file) -> null', runRootOfSpec({ run: { prompt: 'x' } }), null)
     eq('inheritRunRoot: the creating session workspace itself', inheritRunRoot(root), root)
-    eq('inheritRunRoot: a caller without a cwd → null (add refused locally)', inheritRunRoot(null), null)
+    eq('inheritRunRoot: a caller without a cwd -> null (add refused locally)', inheritRunRoot(null), null)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
 }
-// ── session offload: the retention window parser, the retention log, the
+// -- session offload: the retention window parser, the retention log, the
 //    sweep (round health, window semantics, the source/destination existence
 //    table, the liveness gate and its rollback, the budget, compaction, the
 //    trend alert) and the run-lifecycle write gate plus the unit-window view
-//    (O1-O11)
+//    (the eleven sections, from window through layout)
 // ---------------------------------------------------------------------------
 {
   const offload = await import(path.join(PKG, 'lib/offload.js'))
@@ -1808,80 +1808,80 @@ function naiveIsoCond(value, tz, consumed = false) {
     }
   }
 
-  // -- O1: the retention window parser (number = ms; string = 1-2 segments
+  // -- window: the retention window parser (number = ms; string = 1-2 segments
   //        in descending unit order; the discriminating vectors rejected)
-  eq('O1a: number windows are non-negative integer ms', [parseWindowMs(0).ms, parseWindowMs(900000).ms], [0, 900000])
-  ok('O1a: a negative, fractional or NaN number window is invalid', !parseWindowMs(-1).ok && !parseWindowMs(1.5).ok && !parseWindowMs(Number.NaN).ok)
-  eq('O1b: one-segment duration strings', [parseWindowMs('1d').ms, parseWindowMs('24h').ms, parseWindowMs('30m').ms, parseWindowMs('90s').ms, parseWindowMs('5000ms').ms], [86_400_000, 86_400_000, 1_800_000, 90_000, 5000])
-  eq('O1b: two-segment durations in descending unit order', [parseWindowMs('1h30m').ms, parseWindowMs('4h30m').ms, parseWindowMs('1m30s').ms, parseWindowMs('1s500ms').ms], [5_400_000, 16_200_000, 90_000, 1500])
+  eq('window-a: number windows are non-negative integer ms', [parseWindowMs(0).ms, parseWindowMs(900000).ms], [0, 900000])
+  ok('window-a: a negative, fractional or NaN number window is invalid', !parseWindowMs(-1).ok && !parseWindowMs(1.5).ok && !parseWindowMs(Number.NaN).ok)
+  eq('window-b: one-segment duration strings', [parseWindowMs('1d').ms, parseWindowMs('24h').ms, parseWindowMs('30m').ms, parseWindowMs('90s').ms, parseWindowMs('5000ms').ms], [86_400_000, 86_400_000, 1_800_000, 90_000, 5000])
+  eq('window-b: two-segment durations in descending unit order', [parseWindowMs('1h30m').ms, parseWindowMs('4h30m').ms, parseWindowMs('1m30s').ms, parseWindowMs('1s500ms').ms], [5_400_000, 16_200_000, 90_000, 1500])
   ok(
-    'O1c: the discriminating vectors are all invalid (strict segment grammar)',
+    'window-c: the discriminating vectors are all invalid (strict segment grammar)',
     ['1h30m30s', '30m4h', '1w', '1h 30m', '30', '5000', 'h', '24H', '1ms2s', '1w30m', 'banana', ''].every((v) => !parseWindowMs(v).ok),
   )
-  ok('O1c: the range guard rejects overflow', !parseWindowMs('900000000d').ok)
+  ok('window-c: the range guard rejects overflow', !parseWindowMs('900000000d').ok)
 
-  // -- O2: the retention log (round trip, single append write per line, the
+  // -- retlog: the retention log (round trip, single append write per line, the
   //        torn-tail repair, the bad-line skip, the atomic rewrite)
   {
     const dir = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
     try {
       const log = path.join(dir, 'sub', 'retention-log.jsonl')
       const r0 = await readRetentionLog(log)
-      eq('O2a: reading a missing log is an empty, un-repaired read', [r0.entries.length, r0.repaired, r0.badLines], [0, false, 0])
+      eq('retlog-a: reading a missing log is an empty, un-repaired read', [r0.entries.length, r0.repaired, r0.badLines], [0, false, 0])
       await appendRetentionEntry(log, { id: 'a', createdAt: iso(1), unit: 'u1', cwd: '/x/w' })
       await appendRetentionEntry(log, { id: 'b', createdAt: iso(2), unit: 'u2' })
       const lines = readFileSync(log, 'utf8').split('\n')
-      eq('O2a: each append is exactly one complete line (single write per line)', lines.filter((l) => l !== '').length, 2)
-      ok('O2a: the cwd key is present for the first line and omitted for the second', lines[0].includes('"cwd":"/x/w"') && !lines[1].includes('cwd'))
+      eq('retlog-a: each append is exactly one complete line (single write per line)', lines.filter((l) => l !== '').length, 2)
+      ok('retlog-a: the cwd key is present for the first line and omitted for the second', lines[0].includes('"cwd":"/x/w"') && !lines[1].includes('cwd'))
       const r1 = await readRetentionLog(log)
-      eq('O2a: the round trip preserves the entry shape and order', JSON.stringify(r1.entries), JSON.stringify([{ id: 'a', createdAt: iso(1), unit: 'u1', cwd: '/x/w' }, { id: 'b', createdAt: iso(2), unit: 'u2' }]))
+      eq('retlog-a: the round trip preserves the entry shape and order', JSON.stringify(r1.entries), JSON.stringify([{ id: 'a', createdAt: iso(1), unit: 'u1', cwd: '/x/w' }, { id: 'b', createdAt: iso(2), unit: 'u2' }]))
       const torn = path.join(dir, 'torn.jsonl')
       writeFileSync(torn, `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\n{"id":"p","createdAt":"${iso(2)}","unit":"u"`)
       const rt = await readRetentionLog(torn)
-      ok('O2b: a torn trailing line is repaired in place (back to the last newline)', rt.repaired === true && rt.entries.length === 1 && readFileSync(torn, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\n`)
+      ok('retlog-b: a torn trailing line is repaired in place (back to the last newline)', rt.repaired === true && rt.entries.length === 1 && readFileSync(torn, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\n`)
       await appendRetentionEntry(torn, { id: 'c', createdAt: iso(3), unit: 'u' })
-      ok('O2b: an append after the repair lands on its own line', readFileSync(torn, 'utf8').endsWith(`{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n`))
+      ok('retlog-b: an append after the repair lands on its own line', readFileSync(torn, 'utf8').endsWith(`{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n`))
       const torn2 = path.join(dir, 'torn2.jsonl')
       writeFileSync(torn2, `{"id":"a","createdAt":"${iso(1)}","unit":"u"`) // no trailing newline
       await appendRetentionEntry(torn2, { id: 'c', createdAt: iso(3), unit: 'u' })
       const rt2 = await readRetentionLog(torn2)
-      ok('O2b: an append to a torn tail closes it first (the new line stays parseable)', readFileSync(torn2, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"\n{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n` && [rt2.entries.length, rt2.badLines, rt2.repaired].join() === '1,1,false')
+      ok('retlog-b: an append to a torn tail closes it first (the new line stays parseable)', readFileSync(torn2, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"\n{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n` && [rt2.entries.length, rt2.badLines, rt2.repaired].join() === '1,1,false')
       const bad = path.join(dir, 'bad.jsonl')
       writeFileSync(bad, `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\nnot json\n{"id":"b","createdAt":"${iso(2)}","unit":"u"}\n`)
       const rb = await readRetentionLog(bad)
-      eq('O2c: unparseable lines are skipped and counted', [rb.entries.length, rb.badLines, rb.repaired], [2, 1, false])
+      eq('retlog-c: unparseable lines are skipped and counted', [rb.entries.length, rb.badLines, rb.repaired], [2, 1, false])
       await rewriteRetentionLog(log, [r1.entries[1]])
       const r2 = await readRetentionLog(log)
-      eq('O2d: the compaction rewrite keeps exactly the survivors, in order', r2.entries.map((e) => e.id), ['b'])
-      ok('O2d: no temp file remains after the rewrite', !existsSync(`${log}.tmp`))
+      eq('retlog-d: the compaction rewrite keeps exactly the survivors, in order', r2.entries.map((e) => e.id), ['b'])
+      ok('retlog-d: no temp file remains after the rewrite', !existsSync(`${log}.tmp`))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   }
 
-  // -- O3: the offload batch knob (env TIMER_OFFLOAD_BATCH: the positive
+  // -- knob: the offload batch knob (env TIMER_OFFLOAD_BATCH: the positive
   //        integer or the warn-and-keep degradation), the unit-default window
   //        parser (env TIMER_SESSION_RETENTION), and the windows themselves
-  //        through the unit-window view (O9h explicit values, O9i the default)
+  //        through the unit-window view (lifecycle-h explicit values, lifecycle-i the default)
   {
-    eq('O3a: an absent knob falls back to the default', parseOffloadBatch(undefined, () => {}), 50)
-    eq('O3a: a valid knob value is used', parseOffloadBatch('7', () => {}), 7)
-    eq('O3a: the default constant is 50', DEFAULT_OFFLOAD_BATCH, 50)
+    eq('knob-a: an absent knob falls back to the default', parseOffloadBatch(undefined, () => {}), 50)
+    eq('knob-a: a valid knob value is used', parseOffloadBatch('7', () => {}), 7)
+    eq('knob-a: the default constant is 50', DEFAULT_OFFLOAD_BATCH, 50)
     const warns = []
     for (const v of ['0', '-2', 'abc', '5.5']) parseOffloadBatch(v, (m) => warns.push(m))
-    eq('O3b: each invalid knob value warns and falls back to the default', [warns.length, parseOffloadBatch('0', () => {})], [4, 50])
-    ok('O3b: the warning names the knob', warns.every((m) => m.includes('TIMER_OFFLOAD_BATCH')))
-    eq('O3c: an absent unit default is 0 (no warning)', [parseUnitDefaultWindowMs(undefined, (m) => warns.push(m)), warns.length], [0, 4])
-    eq('O3c: a duration default parses to ms', parseUnitDefaultWindowMs('24h', () => {}), 86_400_000)
-    eq('O3c: a bare ms-unit string default is valid', parseUnitDefaultWindowMs('5000ms', () => {}), 5000)
-    eq('O3c: a bare numeric string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('30', (m) => warns.push(m)), warns.length], [0, 5])
-    eq('O3c: the zero string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('0', (m) => warns.push(m)), warns.length], [0, 6])
-    eq('O3c: an empty default is invalid (warn + 0)', [parseUnitDefaultWindowMs('', (m) => warns.push(m)), warns.length], [0, 7])
-    eq('O3c: a garbage default warns and falls back to 0', parseUnitDefaultWindowMs('banana', (m) => warns.push(m)), 0)
-    ok('O3c: the default-window warnings name the knob and the value', warns.some((m) => m.includes('TIMER_SESSION_RETENTION=30')) && warns.some((m) => m.includes('TIMER_SESSION_RETENTION=0')) && warns.some((m) => m.includes('banana')))
+    eq('knob-b: each invalid knob value warns and falls back to the default', [warns.length, parseOffloadBatch('0', () => {})], [4, 50])
+    ok('knob-b: the warning names the knob', warns.every((m) => m.includes('TIMER_OFFLOAD_BATCH')))
+    eq('knob-c: an absent unit default is 0 (no warning)', [parseUnitDefaultWindowMs(undefined, (m) => warns.push(m)), warns.length], [0, 4])
+    eq('knob-c: a duration default parses to ms', parseUnitDefaultWindowMs('24h', () => {}), 86_400_000)
+    eq('knob-c: a bare ms-unit string default is valid', parseUnitDefaultWindowMs('5000ms', () => {}), 5000)
+    eq('knob-c: a bare numeric string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('30', (m) => warns.push(m)), warns.length], [0, 5])
+    eq('knob-c: the zero string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('0', (m) => warns.push(m)), warns.length], [0, 6])
+    eq('knob-c: an empty default is invalid (warn + 0)', [parseUnitDefaultWindowMs('', (m) => warns.push(m)), warns.length], [0, 7])
+    eq('knob-c: a garbage default warns and falls back to 0', parseUnitDefaultWindowMs('banana', (m) => warns.push(m)), 0)
+    ok('knob-c: the default-window warnings name the knob and the value', warns.some((m) => m.includes('TIMER_SESSION_RETENTION=30')) && warns.some((m) => m.includes('TIMER_SESSION_RETENTION=0')) && warns.some((m) => m.includes('banana')))
   }
 
-  // -- O4: round health (the disabled branches: unreachable service, missing
+  // -- health: round health (the disabled branches: unreachable service, missing
   //        store root, the mount mismatch; the registry fallback)
   {
     await runCase(
@@ -1890,8 +1890,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, services: {} })
       },
       ({ report, state }) => {
-        ok('O4a: an unreachable persistence service skips the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('persistence service is unreachable')))
-        eq('O4a: the skipped round performs no action', [report.candidates, report.offloaded, report.balance], [0, 0, 0])
+        ok('health-a: an unreachable persistence service skips the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('persistence service is unreachable')))
+        eq('health-a: the skipped round performs no action', [report.candidates, report.offloaded, report.balance], [0, 0, 0])
       },
     )
     await runCase(
@@ -1900,7 +1900,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, services: { sessionPersistence: makeSpService(storeRoot) } })
       },
       ({ report, state }) => {
-        ok('O4b: a missing store root disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('store root is missing')))
+        ok('health-b: a missing store root disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('store root is missing')))
       },
     )
     await runCase(
@@ -1913,7 +1913,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         })
       },
       ({ report, state }) => {
-        ok('O4c: a mount mismatch disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('different mounts')))
+        ok('health-c: a mount mismatch disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('different mounts')))
       },
     )
     await runCase(
@@ -1930,7 +1930,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         return handles
       },
       ({ report, state }) => {
-        ok('O4d: an unreachable registry falls back to the in-flight set with a warning', report.offloaded === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
+        ok('health-d: an unreachable registry falls back to the in-flight set with a warning', report.offloaded === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
       },
     )
     await runCase(
@@ -1949,13 +1949,13 @@ function naiveIsoCond(value, tz, consumed = false) {
         return handles
       },
       async ({ report, state, logPath }) => {
-        ok('O4d: with the registry unreachable the in-flight set alone gates liveness', report.skippedLive === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
-        eq('O4d: the live entry stays in the log', (await readRetentionLog(logPath)).entries.length, 1)
+        ok('health-d: with the registry unreachable the in-flight set alone gates liveness', report.skippedLive === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
+        eq('health-d: the live entry stays in the log', (await readRetentionLog(logPath)).entries.length, 1)
       },
     )
   }
 
-  // -- O5: the sweep core (window semantics, the existence table, the
+  // -- sweep: the sweep core (window semantics, the existence table, the
   //        liveness rollback, the retry, the unit-gone rule)
   {
     // Cell 1: source present, destination absent (the normal path).
@@ -1967,9 +1967,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, storeRoot, archiveDir, logPath }) => {
-        eq('O5a: the over-window settled session is offloaded', [report.offloaded, report.candidates], [1, 1])
-        ok('O5a: the session dir left the store and entered the archive', !existsSync(path.join(storeRoot, 'a', 'c1')) && existsSync(path.join(archiveDir, 'c1')))
-        eq('O5a: the completed line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('sweep-a: the over-window settled session is offloaded', [report.offloaded, report.candidates], [1, 1])
+        ok('sweep-a: the session dir left the store and entered the archive', !existsSync(path.join(storeRoot, 'a', 'c1')) && existsSync(path.join(archiveDir, 'c1')))
+        eq('sweep-a: the completed line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
       },
     )
     // Cell 2: neither side (the session was cleaned up externally).
@@ -1980,8 +1980,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, logPath }) => {
-        eq('O5b: a session found on neither side completes without action', [report.sourceGone, report.offloaded], [1, 0])
-        eq('O5b: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('sweep-b: a session found on neither side completes without action', [report.sourceGone, report.offloaded], [1, 0])
+        eq('sweep-b: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
       },
     )
     // Cell 3: destination present, source absent (an earlier round already moved it).
@@ -1993,8 +1993,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, logPath }) => {
-        eq('O5c: a session already in the archive completes without action', [report.alreadyArchived, report.offloaded], [1, 0])
-        eq('O5c: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('sweep-c: a session already in the archive completes without action', [report.alreadyArchived, report.offloaded], [1, 0])
+        eq('sweep-c: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
       },
     )
     // Cell 4: both sides present (a deployment anomaly: neither side is touched).
@@ -2007,9 +2007,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, storeRoot, archiveDir, logPath, state }) => {
-        eq('O5d: a both-sides-present session is an error, both sides untouched', [report.errors, report.offloaded], [1, 0])
-        ok('O5d: the anomaly is logged for manual resolution', state.warns.some((m) => m.includes('c4') && m.includes('manual resolution')))
-        ok('O5d: both sides still exist and the line survives the round', existsSync(path.join(storeRoot, 'a', 'c4')) && existsSync(path.join(archiveDir, 'c4')) && (await readRetentionLog(logPath)).entries.length === 1)
+        eq('sweep-d: a both-sides-present session is an error, both sides untouched', [report.errors, report.offloaded], [1, 0])
+        ok('sweep-d: the anomaly is logged for manual resolution', state.warns.some((m) => m.includes('c4') && m.includes('manual resolution')))
+        ok('sweep-d: both sides still exist and the line survives the round', existsSync(path.join(storeRoot, 'a', 'c4')) && existsSync(path.join(archiveDir, 'c4')) && (await readRetentionLog(logPath)).entries.length === 1)
       },
     )
     // A rename failure (EIO): the entry is kept and the next round retries.
@@ -2023,9 +2023,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
       },
       async ({ report, storeRoot, logPath, state }) => {
-        eq('O5e: a failed rename keeps the entry and the source', [report.errors, report.offloaded], [1, 0])
-        ok('O5e: the failure is logged and the retry is announced', state.warns.some((m) => m.includes('eio') && m.includes('retried next round')))
-        ok('O5e: the source dir is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eio')) && (await readRetentionLog(logPath)).entries.length === 1)
+        eq('sweep-e: a failed rename keeps the entry and the source', [report.errors, report.offloaded], [1, 0])
+        ok('sweep-e: the failure is logged and the retry is announced', state.warns.some((m) => m.includes('eio') && m.includes('retried next round')))
+        ok('sweep-e: the source dir is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eio')) && (await readRetentionLog(logPath)).entries.length === 1)
       },
     )
     await runCase(
@@ -2036,8 +2036,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       ({ report, archiveDir }) => {
-        eq('O5e: the next round (failure gone) offloads the same entry', [report.offloaded, report.errors], [1, 0])
-        ok('O5e: the retry landed in the archive', existsSync(path.join(archiveDir, 'eio')))
+        eq('sweep-e: the next round (failure gone) offloads the same entry', [report.offloaded, report.errors], [1, 0])
+        ok('sweep-e: the retry landed in the archive', existsSync(path.join(archiveDir, 'eio')))
       },
     )
     // A rename that reports ENOENT (the source vanished between the check and the move).
@@ -2051,8 +2051,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
       },
       async ({ report, logPath }) => {
-        eq('O5f: a rename ENOENT converges to source-gone', [report.sourceGone, report.errors], [1, 0])
-        eq('O5f: the entry completed and its line was removed', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('sweep-f: a rename ENOENT converges to source-gone', [report.sourceGone, report.errors], [1, 0])
+        eq('sweep-f: the entry completed and its line was removed', (await readRetentionLog(logPath)).entries.length, 0)
       },
     )
     // A rename that reports EEXIST with the source gone (an earlier round moved it).
@@ -2066,8 +2066,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: async (s) => { rmSync(s, { recursive: true, force: true }); throw err } })
       },
       async ({ report, logPath }) => {
-        eq('O5g: an EEXIST with the source gone means the offload already happened', [report.alreadyArchived, report.errors], [1, 0])
-        eq('O5g: the entry completed', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('sweep-g: an EEXIST with the source gone means the offload already happened', [report.alreadyArchived, report.errors], [1, 0])
+        eq('sweep-g: the entry completed', (await readRetentionLog(logPath)).entries.length, 0)
       },
     )
     // A rename that reports EEXIST with the source still present (a true conflict).
@@ -2081,8 +2081,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
       },
       async ({ report, storeRoot, logPath }) => {
-        eq('O5g: an EEXIST with the source present is an error, both sides kept', [report.errors, report.offloaded], [1, 0])
-        ok('O5g: the source is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eex')) && (await readRetentionLog(logPath)).entries.length === 1)
+        eq('sweep-g: an EEXIST with the source present is an error, both sides kept', [report.errors, report.offloaded], [1, 0])
+        ok('sweep-g: the source is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eex')) && (await readRetentionLog(logPath)).entries.length === 1)
       },
     )
     // The locate call itself throws (a broken persistence backend).
@@ -2094,9 +2094,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: broken, sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, logPath, state }) => {
-        eq('O5h: a locate failure keeps the entry for the next round', [report.errors, report.offloaded], [1, 0])
-        ok('O5h: the failure is logged with the session id', state.warns.some((m) => m.includes('locating session loc failed')))
-        eq('O5h: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
+        eq('sweep-h: a locate failure keeps the entry for the next round', [report.errors, report.offloaded], [1, 0])
+        ok('sweep-h: the failure is logged with the session id', state.warns.some((m) => m.includes('locating session loc failed')))
+        eq('sweep-h: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
       },
     )
     // The liveness rollback: the session goes live between the gate and the move.
@@ -2124,9 +2124,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         }
       },
       async ({ report, storeRoot, archiveDir, logPath }) => {
-        eq('O5i: a session that goes live in the gap is neither offloaded nor an error', [report.offloaded, report.errors, report.skippedLive], [0, 0, 0])
-        ok('O5i: the rollback moved the session back to the store', existsSync(path.join(storeRoot, 'a', 'rb')) && !existsSync(path.join(archiveDir, 'rb')))
-        eq('O5i: the entry is kept for the next round', (await readRetentionLog(logPath)).entries.length, 1)
+        eq('sweep-i: a session that goes live in the gap is neither offloaded nor an error', [report.offloaded, report.errors, report.skippedLive], [0, 0, 0])
+        ok('sweep-i: the rollback moved the session back to the store', existsSync(path.join(storeRoot, 'a', 'rb')) && !existsSync(path.join(archiveDir, 'rb')))
+        eq('sweep-i: the entry is kept for the next round', (await readRetentionLog(logPath)).entries.length, 1)
       },
     )
     // The unit-gone rule: no age check, the liveness gate still applies.
@@ -2138,8 +2138,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       ({ report, archiveDir }) => {
-        eq('O5j: a vanished unit is offloaded immediately, regardless of age', [report.offloaded, report.candidates], [1, 1])
-        ok('O5j: the fresh (within-window-age) session was moved', existsSync(path.join(archiveDir, 'ug')))
+        eq('sweep-j: a vanished unit is offloaded immediately, regardless of age', [report.offloaded, report.candidates], [1, 1])
+        ok('sweep-j: the fresh (within-window-age) session was moved', existsSync(path.join(archiveDir, 'ug')))
       },
     )
     await runCase(
@@ -2151,7 +2151,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: reg }, now: () => T0 })
       },
       ({ report }) => {
-        eq('O5j: the liveness gate still applies to a vanished unit', [report.skippedLive, report.offloaded], [1, 0])
+        eq('sweep-j: the liveness gate still applies to a vanished unit', [report.skippedLive, report.offloaded], [1, 0])
       },
     )
     // The window-0 unit (retention closed): entries are kept, never candidates.
@@ -2163,8 +2163,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: new Map([['cold', 0]]), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       async ({ report, logPath }) => {
-        eq('O5k: a window-0 unit keeps even ancient entries', [report.candidates, report.offloaded], [0, 0])
-        eq('O5k: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
+        eq('sweep-k: a window-0 unit keeps even ancient entries', [report.candidates, report.offloaded], [0, 0])
+        eq('sweep-k: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
       },
     )
     // Reopening the window re-manages the retained entries (over-window
@@ -2179,8 +2179,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       ({ report, archiveDir, storeRoot }) => {
-        eq('O5l: the reopened window offloads the over-window entries and keeps the fresh one', [report.offloaded, report.candidates], [1, 1])
-        ok('O5l: the over-window session is archived, the fresh one stays in the store', existsSync(path.join(archiveDir, 'old')) && existsSync(path.join(storeRoot, 'a', 'new')))
+        eq('sweep-l: the reopened window offloads the over-window entries and keeps the fresh one', [report.offloaded, report.candidates], [1, 1])
+        ok('sweep-l: the over-window session is archived, the fresh one stays in the store', existsSync(path.join(archiveDir, 'old')) && existsSync(path.join(storeRoot, 'a', 'new')))
       },
     )
     // A cwd-less entry resolves through the _no-cwd project dir.
@@ -2192,8 +2192,8 @@ function naiveIsoCond(value, tz, consumed = false) {
         return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
       },
       ({ report, archiveDir }) => {
-        eq('O5m: a cwd-less entry is offloaded through the no-cwd project dir', [report.offloaded, report.errors], [1, 0])
-        ok('O5m: the archive copy is named after the session id', existsSync(path.join(archiveDir, 'nc')))
+        eq('sweep-m: a cwd-less entry is offloaded through the no-cwd project dir', [report.offloaded, report.errors], [1, 0])
+        ok('sweep-m: the archive copy is named after the session id', existsSync(path.join(archiveDir, 'nc')))
       },
     )
     // The archive dir is rebuilt after external deletion (the next round heals).
@@ -2212,13 +2212,13 @@ function naiveIsoCond(value, tz, consumed = false) {
         return handles
       },
       ({ report, archiveDir }) => {
-        eq('O5n: after the archive dir was deleted externally the next round rebuilds it and continues', [report.offloaded, report.errors], [1, 0])
-        ok('O5n: the rebuilt archive holds the new offload', existsSync(path.join(archiveDir, 'h3')))
+        eq('sweep-n: after the archive dir was deleted externally the next round rebuilds it and continues', [report.offloaded, report.errors], [1, 0])
+        ok('sweep-n: the rebuilt archive holds the new offload', existsSync(path.join(archiveDir, 'h3')))
       },
     )
   }
 
-  // -- O6: the per-sweep budget (file order, the oldest-first identity, the
+  // -- budget: the per-sweep budget (file order, the oldest-first identity, the
   //        knob, the compaction regimes, sweep idempotency)
   {
     // 51 candidates with the default cap of 50: the first round takes the
@@ -2236,11 +2236,11 @@ function naiveIsoCond(value, tz, consumed = false) {
         }
         const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
         const first = await sweeper.sweep()
-        eq('O6a: the first round offloads exactly the budget', [first.offloaded, first.candidates], [50, 50])
-        eq('O6a: the identity is the fifty oldest entries, in file order', JSON.stringify((await readRetentionLog(logPath)).entries.map((e) => e.id)), JSON.stringify(['n50']))
+        eq('budget-a: the first round offloads exactly the budget', [first.offloaded, first.candidates], [50, 50])
+        eq('budget-a: the identity is the fifty oldest entries, in file order', JSON.stringify((await readRetentionLog(logPath)).entries.map((e) => e.id)), JSON.stringify(['n50']))
         const second = await sweeper.sweep()
-        eq('O6a: the second round offloads the single remainder', [second.offloaded, second.candidates], [1, 1])
-        eq('O6a: the log is empty after both rounds', (await readRetentionLog(logPath)).entries.length, 0)
+        eq('budget-a: the second round offloads the single remainder', [second.offloaded, second.candidates], [1, 1])
+        eq('budget-a: the log is empty after both rounds', (await readRetentionLog(logPath)).entries.length, 0)
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2258,9 +2258,9 @@ function naiveIsoCond(value, tz, consumed = false) {
         }
         const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), cap: 3, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
         const first = await sweeper.sweep()
-        eq('O6b: a valid knob value caps the round', [first.offloaded, first.candidates], [3, 3])
+        eq('budget-b: a valid knob value caps the round', [first.offloaded, first.candidates], [3, 3])
         const second = await sweeper.sweep()
-        eq('O6b: the remainder drains on the next round', second.offloaded, 2)
+        eq('budget-b: the remainder drains on the next round', second.offloaded, 2)
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2280,10 +2280,10 @@ function naiveIsoCond(value, tz, consumed = false) {
         }
         const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
         const first = await sweeper.sweep()
-        eq('O6c: the rate within the budget drains the file in one round', [first.offloaded, first.removedLines, first.balance], [30, 30, 0])
-        eq('O6c: the compaction ratio triggered the rewrite', first.completedRatio, 1)
+        eq('budget-c: the rate within the budget drains the file in one round', [first.offloaded, first.removedLines, first.balance], [30, 30, 0])
+        eq('budget-c: the compaction ratio triggered the rewrite', first.completedRatio, 1)
         const second = await sweeper.sweep()
-        eq('O6c: the next round is a zero-action no-op (sweep idempotency)', [second.candidates, second.offloaded, second.removedLines, second.balance, second.increment], [0, 0, 0, 0, 0])
+        eq('budget-c: the next round is a zero-action no-op (sweep idempotency)', [second.candidates, second.offloaded, second.removedLines, second.balance, second.increment], [0, 0, 0, 0, 0])
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2308,16 +2308,16 @@ function naiveIsoCond(value, tz, consumed = false) {
           }
           rounds.push(await sweeper.sweep())
         }
-        eq('O6d: the over-budget rate rewrites while the completed share stays high', JSON.stringify(rounds.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[3, 3, 2], [3, 3, 4], [3, 3, 6]]))
-        ok('O6d: every offload landed in the archive', existsSync(path.join(archiveDir, 'r00')) && existsSync(path.join(archiveDir, 'r13')))
-        eq('O6d: the file line count equals the reported balance', readFileSync(logPath, 'utf8').trim().split('\n').length, 6)
+        eq('budget-d: the over-budget rate rewrites while the completed share stays high', JSON.stringify(rounds.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[3, 3, 2], [3, 3, 4], [3, 3, 6]]))
+        ok('budget-d: every offload landed in the archive', existsSync(path.join(archiveDir, 'r00')) && existsSync(path.join(archiveDir, 'r13')))
+        eq('budget-d: the file line count equals the reported balance', readFileSync(logPath, 'utf8').trim().split('\n').length, 6)
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
     }
   }
 
-  // -- O7: the trend alert (the consecutive over-envelope increments, the
+  // -- trend: the trend alert (the consecutive over-envelope increments, the
   //        healthy negatives, the out-of-regime dormant branch, the knob
   //        recovery)
   {
@@ -2336,9 +2336,9 @@ function naiveIsoCond(value, tz, consumed = false) {
           results.push(await sweeper.sweep())
         }
         const alerts = results.map((rp) => rp.trendAlert)
-        eq('O7a: the alert fires exactly on the K-th consecutive over-envelope sweep', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true, true]))
-        eq('O7a: the balance grows by the arrivals each round', results[12].balance, 13 * 60)
-        eq('O7a: the reported increment is the arrivals', results[12].increment, 60)
+        eq('trend-a: the alert fires exactly on the K-th consecutive over-envelope sweep', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true, true]))
+        eq('trend-a: the balance grows by the arrivals each round', results[12].balance, 13 * 60)
+        eq('trend-a: the reported increment is the arrivals', results[12].increment, 60)
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2357,7 +2357,7 @@ function naiveIsoCond(value, tz, consumed = false) {
           for (let i = 0; i < burst; i++) await appendRetentionEntry(logPath, { id: `h${r}-${i}`, createdAt: iso(T0), unit: 'cold' })
           results.push(await sweeper.sweep())
         }
-        ok('O7b: a burst shorter than K rounds never alerts', results.every((rp) => !rp.trendAlert))
+        ok('trend-b: a burst shorter than K rounds never alerts', results.every((rp) => !rp.trendAlert))
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2375,7 +2375,7 @@ function naiveIsoCond(value, tz, consumed = false) {
           for (let i = 0; i < 50; i++) await appendRetentionEntry(logPath, { id: `b${r}-${i}`, createdAt: iso(T0), unit: 'cold' })
           results.push(await sweeper.sweep())
         }
-        ok('O7c: arrivals at exactly the budget never alert (the comparison is strict)', results.every((rp) => !rp.trendAlert))
+        ok('trend-c: arrivals at exactly the budget never alert (the comparison is strict)', results.every((rp) => !rp.trendAlert))
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
@@ -2414,9 +2414,9 @@ function naiveIsoCond(value, tz, consumed = false) {
           results.push(await sweeper.sweep())
         }
         const alerts = results.map((rp) => rp.trendAlert)
-        eq('O7d: the out-of-regime rate alerts after K consecutive rounds', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true]))
-        ok('O7d: the compaction trigger stayed dormant through the whole burst', results.every((rp) => rp.removedLines === 0 && rp.completedRatio < COMPACTION_RATIO))
-        eq('O7d: the deadweight backlog accumulated in the log file', readFileSync(logPath, 'utf8').trim().split('\n').length, 12 * 21)
+        eq('trend-d: the out-of-regime rate alerts after K consecutive rounds', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true]))
+        ok('trend-d: the compaction trigger stayed dormant through the whole burst', results.every((rp) => rp.removedLines === 0 && rp.completedRatio < COMPACTION_RATIO))
+        eq('trend-d: the deadweight backlog accumulated in the log file', readFileSync(logPath, 'utf8').trim().split('\n').length, 12 * 21)
         // The operator raises the knob: a fresh instance (like a process
         // restart) re-derives the baseline and the streak starts over.
         sweeper = new OffloadSweeper({
@@ -2432,15 +2432,15 @@ function naiveIsoCond(value, tz, consumed = false) {
         for (let r = 0; r < 3; r++) {
           recovery.push(await sweeper.sweep())
         }
-        eq('O7d: the raised knob re-enables the compaction trigger and flushes the backlog', JSON.stringify(recovery.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[25, 85, 167], [25, 0, 167], [25, 50, 117]]))
-        ok('O7d: no trend alert under the recovered budget', recovery.every((rp) => !rp.trendAlert))
+        eq('trend-d: the raised knob re-enables the compaction trigger and flushes the backlog', JSON.stringify(recovery.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[25, 85, 167], [25, 0, 167], [25, 50, 117]]))
+        ok('trend-d: no trend alert under the recovered budget', recovery.every((rp) => !rp.trendAlert))
         const survivors = (await readRetentionLog(logPath)).entries
-        eq('O7d: only the pending (never-offloaded) lines survived the flush', survivors.length, 117)
+        eq('trend-d: only the pending (never-offloaded) lines survived the flush', survivors.length, 117)
       } finally {
         rmSync(home, { recursive: true, force: true })
       }
     }
-    // O7e: the alert line content (growth rate = (increment - cap) per sweep
+    // trend-e: the alert line content (growth rate = (increment - cap) per sweep
     // and the branch discriminator: dormant out-of-regime vs active in-regime).
     {
       for (const [arrivals, cap, dormant] of [[21, 5, true], [12, 10, false]]) {
@@ -2477,7 +2477,7 @@ function naiveIsoCond(value, tz, consumed = false) {
             ? ['growth rate 16/sweep', 'permanently dormant', 'completed lines are never evicted', 'check the offload batch knob first']
             : ['growth rate 2/sweep', 'still active', 'raise the offload batch knob or lower the dispatch rate']
           ok(
-            `O7e: the alert line carries the ${dormant ? 'dormant-branch' : 'active-branch'} content`,
+            `trend-e: the alert line carries the ${dormant ? 'dormant-branch' : 'active-branch'} content`,
             alert !== undefined && want.every((f) => alert.includes(f)),
             alert,
           )
@@ -2489,7 +2489,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     }
   }
 
-  // -- O8: the periodic arming (the immediate first round, the disposer)
+  // -- arming: the periodic arming (the immediate first round, the disposer)
   {
     const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
     try {
@@ -2497,16 +2497,16 @@ function naiveIsoCond(value, tz, consumed = false) {
       mkdirSync(storeRoot)
       const { sweeper, state } = makeSweeper(home, { storeRoot, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() } })
       sweeper.start()
-      ok('O8a: start arms an immediate first round', await waitFor(() => state.infos.some((m) => m.includes('sweep done')), 2000))
+      ok('arming-a: start arms an immediate first round', await waitFor(() => state.infos.some((m) => m.includes('sweep done')), 2000))
       sweeper.start() // re-arming is a no-op
       sweeper.dispose()
-      ok('O8a: dispose stops the timer without error', true)
+      ok('arming-a: dispose stops the timer without error', true)
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
   }
 
-  // -- O9: the run-lifecycle integration (the write gate through the real
+  // -- lifecycle: the run-lifecycle integration (the write gate through the real
   //        startRun chain, the in-flight lifecycle, the end-to-end archive
   //        move, and the unit-window view over a live scheduler)
   {
@@ -2584,120 +2584,120 @@ function naiveIsoCond(value, tz, consumed = false) {
       return { sweeper, inflight, storeRoot, pluginHome, logPath, sessionId, res, state, clock, registry, cwd }
     }
 
-    // O9a: the write gate open — a dispatched settled session is logged with
+    // lifecycle-a: the write gate open - a dispatched settled session is logged with
     // the session id, the job unit, the dispatch time and the run cwd.
     {
       const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-a') })
       try {
-        eq('O9a: the run settles normally with the hooks wired', p.res.ok, true)
-        ok('O9a: the settled session leaves the in-flight set', p.inflight.size === 0)
-        ok('O9a: the write gate logged exactly the dispatched session', await waitFor(async () => {
+        eq('lifecycle-a: the run settles normally with the hooks wired', p.res.ok, true)
+        ok('lifecycle-a: the settled session leaves the in-flight set', p.inflight.size === 0)
+        ok('lifecycle-a: the write gate logged exactly the dispatched session', await waitFor(async () => {
           if (!existsSync(p.logPath)) return false
           return (await readRetentionLog(p.logPath)).entries.length === 1
         }, 4000))
         const line = (await readRetentionLog(p.logPath)).entries[0]
-        ok('O9a: the log line carries the session id, the job unit, the dispatch time and the run cwd', line.id === p.sessionId && line.unit === 'job-x' && line.cwd === p.cwd && Date.parse(line.createdAt) === T0)
+        ok('lifecycle-a: the log line carries the session id, the job unit, the dispatch time and the run cwd', line.id === p.sessionId && line.unit === 'job-x' && line.cwd === p.cwd && Date.parse(line.createdAt) === T0)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9b: the write gate closed — a zero window is not tracked.
+    // lifecycle-b: the write gate closed - a zero window is not tracked.
     {
       const p = await probe({ windowMs: 0, cwd: path.join(tmpdir(), 'ws-b') })
       try {
-        eq('O9b: the run settles normally with a zero window', p.res.ok, true)
+        eq('lifecycle-b: the run settles normally with a zero window', p.res.ok, true)
         await sleep(150) // the (skipped) retention append settles
-        ok('O9b: without a retention window the write gate logs nothing', existsSync(p.logPath) === false)
-        eq('O9b: the settled session leaves the in-flight set', p.inflight.size, 0)
+        ok('lifecycle-b: without a retention window the write gate logs nothing', existsSync(p.logPath) === false)
+        eq('lifecycle-b: the settled session leaves the in-flight set', p.inflight.size, 0)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9c: a vanished unit — the job no longer loads: the dispatch is untracked.
+    // lifecycle-c: a vanished unit - the job no longer loads: the dispatch is untracked.
     {
       const p = await probe({ windowMs: undefined, cwd: path.join(tmpdir(), 'ws-c') })
       try {
-        eq('O9c: the run settles normally for a vanished unit', p.res.ok, true)
+        eq('lifecycle-c: the run settles normally for a vanished unit', p.res.ok, true)
         await sleep(150)
-        ok('O9c: a vanished unit is not tracked at dispatch time', existsSync(p.logPath) === false)
+        ok('lifecycle-c: a vanished unit is not tracked at dispatch time', existsSync(p.logPath) === false)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9d: a cwd-less run fails at create before the write point: no line,
+    // lifecycle-d: a cwd-less run fails at create before the write point: no line,
     // the in-flight mark is still cleared at settlement.
     {
       const p = await probe({ windowMs: W })
       try {
-        eq('O9d: a cwd-less run fails create_failed with the actionable remedy', [p.res.ok, p.res.error !== undefined && p.res.error.includes('no run cwd')], [false, true])
+        eq('lifecycle-d: a cwd-less run fails create_failed with the actionable remedy', [p.res.ok, p.res.error !== undefined && p.res.error.includes('no run cwd')], [false, true])
         await sleep(150)
-        eq('O9d: the create-failed run clears the in-flight mark', p.inflight.size, 0)
-        ok('O9d: no retention line is written for a cwd-less run', existsSync(p.logPath) === false)
+        eq('lifecycle-d: the create-failed run clears the in-flight mark', p.inflight.size, 0)
+        ok('lifecycle-d: no retention line is written for a cwd-less run', existsSync(p.logPath) === false)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9e: the end-to-end chain — dispatch, settle, age past the window, sweep:
+    // lifecycle-e: the end-to-end chain - dispatch, settle, age past the window, sweep:
     // the session dir is moved from the store into the archive and the line
     // compacts away.
     {
       const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-e') })
       try {
-        eq('O9e: the run settles with the hooks wired', p.res.ok, true)
+        eq('lifecycle-e: the run settles with the hooks wired', p.res.ok, true)
         makeSessionDir(p.storeRoot, p.sessionId, p.cwd) // the framework store side
         p.clock.t = T0 + 30_000 // within the window
         let rep = await p.sweeper.sweep()
-        eq('O9e: the within-window session is kept (not yet due)', [rep.offloaded, rep.skippedLive, rep.balance], [0, 0, 1])
+        eq('lifecycle-e: the within-window session is kept (not yet due)', [rep.offloaded, rep.skippedLive, rep.balance], [0, 0, 1])
         p.clock.t = T0 + W + 1_000 // over the window
         rep = await p.sweeper.sweep()
-        eq('O9e: the over-window settled session is offloaded', [rep.offloaded, rep.candidates], [1, 1])
-        ok('O9e: the session dir left the store and entered the archive', !existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && existsSync(path.join(p.pluginHome, OFFLOAD_ARCHIVE_DIR, p.sessionId)))
-        eq('O9e: the completed line is removed by the compaction rewrite', (await readRetentionLog(p.logPath)).entries.length, 0)
+        eq('lifecycle-e: the over-window settled session is offloaded', [rep.offloaded, rep.candidates], [1, 1])
+        ok('lifecycle-e: the session dir left the store and entered the archive', !existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && existsSync(path.join(p.pluginHome, OFFLOAD_ARCHIVE_DIR, p.sessionId)))
+        eq('lifecycle-e: the completed line is removed by the compaction rewrite', (await readRetentionLog(p.logPath)).entries.length, 0)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9f: the registry liveness gate — a session that went live after its
+    // lifecycle-f: the registry liveness gate - a session that went live after its
     // settlement is not archived (the line and the source dir are kept).
     {
       const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-f') })
       try {
-        eq('O9f: the run settles with the hooks wired', p.res.ok, true)
+        eq('lifecycle-f: the run settles with the hooks wired', p.res.ok, true)
         makeSessionDir(p.storeRoot, p.sessionId, p.cwd)
         p.registry.known.add(p.sessionId) // went live again after settlement
         p.clock.t = T0 + W + 1_000
         const rep = await p.sweeper.sweep()
-        eq('O9f: the live session is kept out of the archive', [rep.skippedLive, rep.offloaded], [1, 0])
-        ok('O9f: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
+        eq('lifecycle-f: the live session is kept out of the archive', [rep.skippedLive, rep.offloaded], [1, 0])
+        ok('lifecycle-f: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9g: the in-flight gate — an unsettled dispatch (the turn never ends)
+    // lifecycle-g: the in-flight gate - an unsettled dispatch (the turn never ends)
     // is marked in-flight until its settlement; the sweep must not archive it.
     {
       const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-g'), hang: true })
       try {
-        eq('O9g: the dispatch succeeds even though the turn never settles', p.res.ok, true)
-        ok('O9g: the unsettled session stays in the shared in-flight set', p.inflight.has(p.sessionId) === true)
+        eq('lifecycle-g: the dispatch succeeds even though the turn never settles', p.res.ok, true)
+        ok('lifecycle-g: the unsettled session stays in the shared in-flight set', p.inflight.has(p.sessionId) === true)
         makeSessionDir(p.storeRoot, p.sessionId, p.cwd)
         p.clock.t = T0 + W + 1_000
         const rep = await p.sweeper.sweep()
-        eq('O9g: the in-flight session is not a candidate and not an error', [rep.skippedLive, rep.offloaded, rep.errors], [1, 0, 0])
-        ok('O9g: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
+        eq('lifecycle-g: the in-flight session is not a candidate and not an error', [rep.skippedLive, rep.offloaded, rep.errors], [1, 0, 0])
+        ok('lifecycle-g: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
         p.sweeper.dispose()
       } finally {
         rmSync(p.storeRoot, { recursive: true, force: true })
         rmSync(p.pluginHome, { recursive: true, force: true })
       }
     }
-    // O9h: the unit-window view over a live scheduler (job file values:
+    // lifecycle-h: the unit-window view over a live scheduler (job file values:
     // valid string / valid number / null / absent / invalid / disabled unit /
     // rejected file), the warn dedupe, and hot updates through reload.
     {
@@ -2724,40 +2724,40 @@ function naiveIsoCond(value, tz, consumed = false) {
         const sched = new TimerScheduler({ ctx: {}, logger, jobsDir })
         await sched.reload()
         const windows = sched.unitWindows()
-        eq('O9h: a valid string window resolves to ms', windows.get('w1'), 86_400_000)
-        eq('O9h: a numeric window is ms', windows.get('w2'), 900000)
-        eq('O9h: a null window is 0 (retain)', windows.get('w3'), 0)
-        eq('O9h: an absent window is 0 (retain)', windows.get('w4'), 0)
-        eq('O9h: an invalid window warns and resolves to 0', windows.get('w5'), 0)
-        ok('O9h: the warning names the job and the invalid value', warns.some((m) => m.includes('w5') && m.includes('banana')))
-        eq('O9h: a disabled job is still a unit (its window applies)', windows.get('w6'), 5_400_000)
-        ok('O9h: a rejected job file is not a unit (vanished unit)', windows.has('w7') === false)
-        eq('O9h: the view carries every loaded job exactly once', windows.size, 6)
+        eq('lifecycle-h: a valid string window resolves to ms', windows.get('w1'), 86_400_000)
+        eq('lifecycle-h: a numeric window is ms', windows.get('w2'), 900000)
+        eq('lifecycle-h: a null window is 0 (retain)', windows.get('w3'), 0)
+        eq('lifecycle-h: an absent window is 0 (retain)', windows.get('w4'), 0)
+        eq('lifecycle-h: an invalid window warns and resolves to 0', windows.get('w5'), 0)
+        ok('lifecycle-h: the warning names the job and the invalid value', warns.some((m) => m.includes('w5') && m.includes('banana')))
+        eq('lifecycle-h: a disabled job is still a unit (its window applies)', windows.get('w6'), 5_400_000)
+        ok('lifecycle-h: a rejected job file is not a unit (vanished unit)', windows.has('w7') === false)
+        eq('lifecycle-h: the view carries every loaded job exactly once', windows.size, 6)
         sched.unitWindows()
-        eq('O9h: the invalid-window warning is deduplicated across rounds', warns.filter((m) => m.includes('banana')).length, 1)
+        eq('lifecycle-h: the invalid-window warning is deduplicated across rounds', warns.filter((m) => m.includes('banana')).length, 1)
         file('w5', spec({ sessionRetention: '4h30m' }))
         await sched.reload()
         const windows2 = sched.unitWindows()
-        eq('O9h: a hot update re-derives the window without a restart', windows2.get('w5'), 16_200_000)
-        eq('O9h: a repaired value leaves no new warning', warns.filter((m) => m.includes('w5')).length, 1)
+        eq('lifecycle-h: a hot update re-derives the window without a restart', windows2.get('w5'), 16_200_000)
+        eq('lifecycle-h: a repaired value leaves no new warning', warns.filter((m) => m.includes('w5')).length, 1)
         file('w1', spec({ sessionRetention: '4h30m' }))
         file('w2', '{ broken')
         await sched.reload()
         const windows3 = sched.unitWindows()
-        eq('O9h: a hot update changes a valid window', windows3.get('w1'), 16_200_000)
-        ok('O9h: a file that no longer parses drops its unit (vanished unit)', windows3.has('w2') === false)
+        eq('lifecycle-h: a hot update changes a valid window', windows3.get('w1'), 16_200_000)
+        ok('lifecycle-h: a file that no longer parses drops its unit (vanished unit)', windows3.has('w2') === false)
         file('w5', spec({ sessionRetention: 'h30m' }))
         await sched.reload()
         sched.unitWindows()
         // the quoted value: the warning text carries an example duration whose
         // tail overlaps the bare substring, so match the raw value as quoted.
-        eq('O9h: a changed invalid value warns again (the dedupe key is the raw value)', warns.filter((m) => m.includes('"h30m"')).length, 1)
+        eq('lifecycle-h: a changed invalid value warns again (the dedupe key is the raw value)', warns.filter((m) => m.includes('"h30m"')).length, 1)
         await sched.stop()
       } finally {
         rmSync(base, { recursive: true, force: true })
       }
     }
-    // O9i: the unit-default window (the TIMER_SESSION_RETENTION env, boot-fixed
+    // lifecycle-i: the unit-default window (the TIMER_SESSION_RETENTION env, boot-fixed
     // through the scheduler option): jobs with absent/null run.sessionRetention take
     // it; explicit values (valid or invalid) always take precedence; a rejected file
     // is still not a unit.
@@ -2780,14 +2780,14 @@ function naiveIsoCond(value, tz, consumed = false) {
         const sched = new TimerScheduler({ ctx: {}, logger, jobsDir, defaultRetentionMs: 3_600_000 })
         await sched.reload()
         const windows = sched.unitWindows()
-        eq('O9i: an explicit string window takes precedence over the default', windows.get('d1'), 86_400_000)
-        eq('O9i: an explicit numeric window takes precedence over the default', windows.get('d2'), 900000)
-        eq('O9i: a null window takes the unit default', windows.get('d3'), 3_600_000)
-        eq('O9i: an absent window takes the unit default', windows.get('d4'), 3_600_000)
-        eq('O9i: an explicit invalid window warns and resolves to 0 (the default does not rescue it)', windows.get('d5'), 0)
-        ok('O9i: the warning names the job and the invalid value', warns.some((m) => m.includes('d5') && m.includes('banana')))
-        ok('O9i: a rejected job file is not a unit (vanished unit)', windows.has('d6') === false)
-        eq('O9i: the view carries every loaded job exactly once', windows.size, 5)
+        eq('lifecycle-i: an explicit string window takes precedence over the default', windows.get('d1'), 86_400_000)
+        eq('lifecycle-i: an explicit numeric window takes precedence over the default', windows.get('d2'), 900000)
+        eq('lifecycle-i: a null window takes the unit default', windows.get('d3'), 3_600_000)
+        eq('lifecycle-i: an absent window takes the unit default', windows.get('d4'), 3_600_000)
+        eq('lifecycle-i: an explicit invalid window warns and resolves to 0 (the default does not rescue it)', windows.get('d5'), 0)
+        ok('lifecycle-i: the warning names the job and the invalid value', warns.some((m) => m.includes('d5') && m.includes('banana')))
+        ok('lifecycle-i: a rejected job file is not a unit (vanished unit)', windows.has('d6') === false)
+        eq('lifecycle-i: the view carries every loaded job exactly once', windows.size, 5)
         await sched.stop()
       } finally {
         rmSync(base, { recursive: true, force: true })
@@ -2795,7 +2795,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     }
   }
 
-  // -- O10: the lost-retention-log startup warning and the
+  // -- logfault: the lost-retention-log startup warning and the
   //         append<->compaction mutex (the rewrite-window seam)
   {
     const mkSweeperCase = async (seed) => {
@@ -2827,13 +2827,13 @@ function naiveIsoCond(value, tz, consumed = false) {
       }
     }
     const fresh = await mkSweeperCase(() => {})
-    eq('O10a: a fresh install (no archive, no log) stays silent', fresh.length, 0)
+    eq('logfault-a: a fresh install (no archive, no log) stays silent', fresh.length, 0)
     const lost = await mkSweeperCase((archive) => {
       mkdirSync(path.join(archive, 'x'), { recursive: true })
       writeFileSync(path.join(archive, 'x', 'session.v4.jsonl.zstd'), 'log')
     })
-    ok('O10b: the lost log warns prominently on startup (exactly once across rounds)', lost.length === 1, lost)
-    // O10c: park the compaction rewrite between its temp write and its rename,
+    ok('logfault-b: the lost log warns prominently on startup (exactly once across rounds)', lost.length === 1, lost)
+    // logfault-c: park the compaction rewrite between its temp write and its rename,
     // append across the window, and prove the mutex serializes the append onto
     // the post-rename file (the line survives).
     {
@@ -2897,7 +2897,7 @@ function naiveIsoCond(value, tz, consumed = false) {
         clearInterval(keepAlive)
         const after = (await readRetentionLog(logPath)).entries
         ok(
-          'O10c: an append parked in the rewrite window survives the rewrite (the write mutex)',
+          'logfault-c: an append parked in the rewrite window survives the rewrite (the write mutex)',
           rep.removedLines === 4 && after.length === 2 && after.some((e) => e.id === liveId) && after.some((e) => e.id === 'mnew'),
           JSON.stringify([rep.removedLines, after.map((e) => e.id)]),
         )
@@ -2909,51 +2909,58 @@ function naiveIsoCond(value, tz, consumed = false) {
     }
   }
 }
-{ // O11: the plugin-level layout pin (the G3 F1/F2 regression layer). The O-series
-  // fixtures validate the sweeper component under the real-world layout, but none of
+{ // layout: the plugin-level layout pin. The offload-plane fixture sections
+  // above validate the sweeper component under the real-world layout, but none of
   // them constructs the plugin: this section pins, at the plugin level, the single
   // layout definition the constructor delegates to (offloadLayout) - the retention
   // log and the archive under the plugin home, the store root as the FRAMEWORK
-  // session store (a sibling of the plugin home, never under it) - and keeps the
-  // two files the offload plane ships in pure ASCII.
+  // session store (a sibling of the plugin home, never under it).
   const offload = await import(path.join(PKG, 'lib/offload.js'))
   {
-    // O11a: the layout helper resolves the four locations relative to the harness
+    // layout-a: the layout helper resolves the four locations relative to the harness
     // home; the store root must be its SIBLING (a direct root/<segment> join), not
-    // a child of the plugin home (the F1 defect: a phantom root under the plugin
-    // home that nothing ever creates, which disabled every sweep round).
+    // a child of the plugin home (a phantom root there - one that nothing ever
+    // creates - would disable every sweep round).
     const root = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-layout-'))
     try {
       const lay = offload.offloadLayout((seg) => path.join(root, seg))
-      eq('O11a: the plugin home base is $DSH_HOME/dsh-timer', lay.base, path.join(root, 'dsh-timer'))
-      eq('O11a: the archive sits under the plugin home', lay.archive, path.join(root, 'dsh-timer', 'archived-sessions'))
-      eq('O11a: the retention log sits under the plugin home', lay.log, path.join(root, 'dsh-timer', 'retention-log.jsonl'))
-      eq('O11a: the store root is the framework store, a SIBLING of the plugin home', lay.storeRoot, path.join(root, 'sessions'))
-      ok('O11a: the store root is never a child of the plugin home', !lay.storeRoot.startsWith(lay.base + path.sep))
+      eq('layout-a: the plugin home base is $DSH_HOME/dsh-timer', lay.base, path.join(root, 'dsh-timer'))
+      eq('layout-a: the archive sits under the plugin home', lay.archive, path.join(root, 'dsh-timer', 'archived-sessions'))
+      eq('layout-a: the retention log sits under the plugin home', lay.log, path.join(root, 'dsh-timer', 'retention-log.jsonl'))
+      eq('layout-a: the store root is the framework store, a SIBLING of the plugin home', lay.storeRoot, path.join(root, 'sessions'))
+      ok('layout-a: the store root is never a child of the plugin home', !lay.storeRoot.startsWith(lay.base + path.sep))
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   }
   {
-    // O11b: the constructor delegates its wiring to the helper (a source-level pin -
+    // layout-b: the constructor delegates its wiring to the helper (a source-level pin -
     // constructing the plugin in-package needs the full cordis container); a wiring
     // that bypasses the helper or re-derives the store root under the plugin home
     // fails here before it ships.
     const indexSrc = readFileSync(path.join(PKG, 'src/index.ts'), 'utf8')
-    ok('O11b: the constructor wires the sweeper home through offloadLayout', indexSrc.includes('home: offloadLayout(resolveHome)'))
-    ok('O11b: the store root is never re-derived under the plugin home in the constructor', !indexSrc.includes('OFFLOAD_STORE_ROOT'))
-  }
-  {
-    // O11c: the two files the offload plane ships are pure ASCII (the reference
-    // plugin holds its shipped tree to strict ASCII; the pre-offload baseline files
-    // carry historic non-ASCII comments and remain tracked by the CJK guard).
-    for (const f of ['offload.ts', 'retention.ts']) {
-      const src = readFileSync(path.join(PKG, 'src', f), 'utf8')
-      ok(`O11c: src/${f} is pure ASCII`, /^[\x00-\x7F]*$/.test(src))
-    }
+    ok('layout-b: the constructor wires the sweeper home through offloadLayout', indexSrc.includes('home: offloadLayout(resolveHome)'))
+    ok('layout-b: the store root is never re-derived under the plugin home in the constructor', !indexSrc.includes('OFFLOAD_STORE_ROOT'))
   }
 }
-{ // shipped-source hygiene guard: src/ stays self-contained and process-fact-free — a reader
+{ // shipped-tree ASCII gate: every shipped file in the package (src, test, lib,
+  // skill, schemas, README, cordis.patch.yml, package.json, toolchain config)
+  // is strict ASCII; a single non-ASCII character anywhere in the tree fails the
+  // selftest. The compiled lib/ is scanned as well, so a non-ASCII source cannot
+  // hide behind a stale build.
+  const asciiSkip = new Set(['.git', 'node_modules', '.selftest-tmp'])
+  const asciiWalk = (dir) => {
+    for (const e of readdirSync(dir)) {
+      if (asciiSkip.has(e)) continue
+      const p = path.join(dir, e)
+      const st = statSync(p)
+      if (st.isDirectory()) asciiWalk(p)
+      else if (st.isFile()) ok(`ascii: ${path.relative(PKG, p)} is strict ASCII`, /^[\x00-\x7F]*$/.test(readFileSync(p, 'utf8')))
+    }
+  }
+  asciiWalk(PKG)
+}
+{ // shipped-source hygiene guard: src/ stays self-contained and process-fact-free - a reader
   // needs only the file plus stable external authorities (systemd v262 semantics, the croner
   // API, framework API names). No CJK characters, no two-digit project version tags (a
   // three-digit external pin such as systemd v262 would not match the two-digit pattern),
@@ -2967,7 +2974,7 @@ function naiveIsoCond(value, tz, consumed = false) {
     ok(`shipped source: src/${f} carries no calendar dates`, !/20\d{2}-\d{2}-\d{2}/.test(src))
   }
 }
-{ // selftest hygiene guard: the selftest itself stays self-contained — no dangling pointers
+{ // selftest hygiene guard: the selftest itself stays self-contained - no dangling pointers
   // to non-shipped material (design-doc sections, review findings, version-round labels,
   // machine-specific paths, source line-number pointers, CJK ruling quotes). A reader needs
   // only this file plus the shipped source and stable external authorities. Test-vector dates
@@ -2975,16 +2982,16 @@ function naiveIsoCond(value, tz, consumed = false) {
   // exempt. This guard block is excluded from its own scan.
   const raw = readFileSync(path.join(PKG, 'test', 'selftest.mjs'), 'utf8')
   const testSrc = raw.slice(0, raw.indexOf('// selftest hygiene guard'))
-  ok('selftest hygiene: no design-doc section pointers', !/design doc|design v\d|spec §|§\d/.test(testSrc))
+  ok('selftest hygiene: no design-doc section pointers', !/design doc|design v\d|spec \u00a7|\u00a7\d/.test(testSrc))
   ok('selftest hygiene: no machine-specific paths', !/\/workspace\//.test(testSrc))
-  ok('selftest hygiene: no source line-number pointers', !/L\d+[-–—]L?\d+/.test(testSrc))
+  ok('selftest hygiene: no source line-number pointers', !/L\d+[---]L?\d+/.test(testSrc))
   ok('selftest hygiene: no review-round wrappers', !/round-?\d+|review #\d/.test(testSrc))
   ok('selftest hygiene: no project version-round tags', !/\bv\d{2}\b/.test(testSrc))
   ok('selftest hygiene: no CJK characters', !/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(testSrc))
   ok('selftest hygiene: no review finding identifiers', !/R\d{1,2}-[A-Za-z]\w*/.test(testSrc))
   ok('selftest hygiene: no version-round identifiers', !/\bv\d{2}[A-Za-z_]\w*/.test(testSrc))
 }
-// ── results ──────────────────────────────────────────────────────
+// -- results ------------------------------------------------------
 console.log(`selftest: ${passed} passed, ${failures.length} failed`)
 for (const f of failures) console.log(`  FAIL: ${f}`)
 process.exit(failures.length > 0 ? 1 : 0)

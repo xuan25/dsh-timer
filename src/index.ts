@@ -1,5 +1,5 @@
-// dsh-timer — in-process scheduled-task plugin for dsh.
-// In-process execution: a 30s tick scans <jobsDir>/<id>.json → fires on expiry → each run
+// dsh-timer - in-process scheduled-task plugin for dsh.
+// In-process execution: a 30s tick scans <jobsDir>/<id>.json -> fires on expiry -> each run
 // creates a fresh prompted session.
 // Plugin form = cordis class plugin (Service subclass): `new DshTimerPlugin(ctx, validatedConfig)`.
 // The instance `async *[Service.init]()` carries the lifecycle: yield the disposer
@@ -21,7 +21,7 @@ declare module '@deepseek-ai/cordis' {
      * (dsh-app-boot): `dshHomePath(...segments)` joins onto the resolved harness home
      * ($DSH_HOME, else ~/.dsh). Optional in the framework's own typing: a host that does
      * not provide it cannot host this plugin (the declared-missing service parks the
-     * plugin fiber — see the class doc); all dsh product hosts provide it.
+     * plugin fiber - see the class doc); all dsh product hosts provide it.
      */
     dshHomePath?: (...segments: string[]) => string
   }
@@ -48,7 +48,7 @@ export interface DshTimerConfig {
  * offload hooks (in-flight mark at startRun entry, the retention line at dispatch, the
  * in-flight clear at settlement). Per-sweep offload budget = env TIMER_OFFLOAD_BATCH
  * (default 50; invalid value warns and falls back). Unit-default retention window =
- * env TIMER_SESSION_RETENTION (R6 duration syntax, read once at boot; invalid warns and
+ * env TIMER_SESSION_RETENTION (a duration window such as 24h, read once at boot; invalid warns and
  * falls back to 0; unset = no default): the window applied to jobs without an explicit
  * run.sessionRetention.
  *
@@ -64,7 +64,7 @@ export interface DshTimerConfig {
  * from the cryptic `cannot get property "X" without inject` into the clear `cannot get
  * required service "X"`, keeping the declaration consistent with the actual read sites.
  * A declared service with no implementation parks the plugin fiber (it never activates,
- * it does not throw): a host without dshHomePath therefore never starts this plugin —
+ * it does not throw): a host without dshHomePath therefore never starts this plugin -
  * all dsh product hosts provide it at boot, so this only affects out-of-product hosts.
  * OPTIONAL host services (the framework's agent-default-model service and the settings
  * document service, behind the run session's default model route) are deliberately NOT
@@ -72,7 +72,7 @@ export interface DshTimerConfig {
  * through cordis' built-in non-strict accessor `ctx.get(name)` (declared on the
  * framework's own Context type, mixed onto every context by the reflection layer; it
  * returns the host-provided service or undefined when the host provides none), which
- * tolerates their absence (see readDefaultModelSelection in runner.ts) — a direct
+ * tolerates their absence (see readDefaultModelSelection in runner.ts) - a direct
  * property read of an undeclared service throws `cannot get property ... without
  * inject` at runtime, and declaring one in `inject` would park the plugin on every
  * host that lacks it.
@@ -130,7 +130,7 @@ export class DshTimerPlugin extends Service {
     // on-disk locations: the retention log and archive under the plugin home,
     // the store root = the framework session store (a SIBLING of the plugin
     // home). The selftest pins both the helper's output and this delegation
-    // (the O11 layout section).
+    // (the layout section).
     this.sweeper = new OffloadSweeper({
       ctx,
       logger,

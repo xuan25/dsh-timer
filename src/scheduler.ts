@@ -1,6 +1,6 @@
 // dsh-timer scheduling core:
-//   directory scan (event + manual reload) → job models → 30s tick (clock rewind / system
-//   timezone change / expiry fires / overlap) → recompute after run settlement → verbs
+//   directory scan (event + manual reload) -> job models -> 30s tick (clock rewind / system
+//   timezone change / expiry fires / overlap) -> recompute after run settlement -> verbs
 //   (reload/status/run/enable/disable/add/update/delete/cancel).
 // Config = <jobsDir>/<id>.json (one file per id; the in-file `enable` field decides
 // enabled/disabled: absent or true = enabled, false = disabled).
@@ -45,17 +45,17 @@ const RELOAD_DEBOUNCE_MS = 500
  * Constructed and started by DshTimerPlugin during apply; stopped on plugin dispose.
  */
 export class TimerScheduler {
-  /** Enabled job models (id → model; the trigger table; hot-updated in place on rescan). */
+  /** Enabled job models (id -> model; the trigger table; hot-updated in place on rescan). */
   private readonly jobs = new Map<string, JobModel>()
-  /** Rejected jobs (id → reason). */
+  /** Rejected jobs (id -> reason). */
   private readonly rejected = new Map<string, string>()
-  /** Disabled job models (id → model; valid spec with enable: false). Kept in memory
-   * continuously: status, manual run, and hot update all use this model — no temporary
+  /** Disabled job models (id -> model; valid spec with enable: false). Kept in memory
+   * continuously: status, manual run, and hot update all use this model - no temporary
    * file-read models; the state file stays the mirror (manual runs persist into it). */
   private readonly disabledJobs = new Map<string, JobModel>()
-  /** In-progress runs (id → Set<run>). */
+  /** In-progress runs (id -> Set<run>). */
   private readonly activeRuns = new Map<string, Set<RunRecord>>()
-  /** onStartupSec already fired in this process (preserved across disable→enable). */
+  /** onStartupSec already fired in this process (preserved across disable->enable). */
   private readonly startupMemory = new Map<string, boolean>()
   /** Process start moment (onStartupSec base / backfilling finishedAt). */
   private readonly processStartMs = Date.now()
@@ -97,7 +97,7 @@ export class TimerScheduler {
         : { onRunStarted: offload.onRunStarted, onDispatch: offload.onDispatch }
   }
 
-  // ── State persistence ─────────────────────────────────────
+  // -- State persistence -------------------------------------
 
   private stateFileOf(id: string): string {
     return stateFileFor(this.jobsDir, id)
@@ -133,7 +133,7 @@ export class TimerScheduler {
    * Validate an id against the job-id grammar; `detail` optionally extends the error message.
    * A missing id is rejected up front: `String(undefined)` produces the literal "undefined",
    * which passes the grammar and would otherwise become a silently created job named
-   * "undefined" — an omission must fail fast instead.
+   * "undefined" - an omission must fail fast instead.
    */
   private assertJobId(id: string | undefined, detail?: string): string {
     if (typeof id !== 'string') throw new Error('job id is required (id is a separate argument of the verb, not a field of the spec)')
@@ -192,9 +192,9 @@ export class TimerScheduler {
   /** Rebuild calendar conditions after load / re-enable / config hot update (recompute rule = rearm.recomputeLoad).
    * A persisted anchor in the future of now (out-of-process clock rewind: the process was stopped
    * across the rewind, so the tick's in-process detector cannot see it) is clamped to now in place
-   * before recomputing — the same correction the tick's rewind branch applies in-process
+   * before recomputing - the same correction the tick's rewind branch applies in-process
    * (systemd v262 load-time twins: a future persistent stamp is rejected / a future base is
-   * recalculated from the current time, timer.c L713–719 + #6036 L429–441, both unconditional).
+   * recalculated from the current time, timer.c L713-719 + #6036 L429-441, both unconditional).
    * Grid points in the erased interval re-present under the rewound clock and elapse once more
    * (re-presented labels are new firings at new physical instants, not duplicates). The clamped
    * anchor is persisted by the caller's state write. */
@@ -223,7 +223,7 @@ export class TimerScheduler {
     this.syncCalendarsToState(model)
   }
 
-  /** Consume one fire (create-failed path): the fire is treated as happened — the ISO stays
+  /** Consume one fire (create-failed path): the fire is treated as happened - the ISO stays
    * consumed; a suspended cron re-arms from the fire moment, the job anchor advanced by the
    * fire site (no retry: the bookkeeping rationale is bookkeepCreateFailed). */
   private consumeFire(cond: CalCond, firedAtMs: number): void {
@@ -235,7 +235,7 @@ export class TimerScheduler {
     }
   }
 
-  // ── Run callbacks ─────────────────────────────────────────
+  // -- Run callbacks -----------------------------------------
 
   private onRunStart(model: JobModel, run: RunRecord, record0: StateRun): void {
     void run
@@ -246,11 +246,11 @@ export class TimerScheduler {
   }
 
   /**
-   * Create-failed fire bookkeeping — run by the tick's detached startRun continuation at
+   * Create-failed fire bookkeeping - run by the tick's detached startRun continuation at
    * settlement time, never inline in the tick loop (which must not block on create
-   * settlement): the fire is treated as happened — ISO stays consumed; deferred cron
+   * settlement): the fire is treated as happened - ISO stays consumed; deferred cron
    * re-arms from the actual trigger moment (applyFire left it suspended: nextFireMs =
-   * null); onActiveSec re-arms from the tick moment → no per-fire / per-tick retry storm.
+   * null); onActiveSec re-arms from the tick moment -> no per-fire / per-tick retry storm.
    */
   private bookkeepCreateFailed(model: JobModel, expired: CalCond[], monoFire: boolean, nowMs: number): void {
     for (const cond of expired) this.consumeFire(cond, nowMs)
@@ -262,9 +262,9 @@ export class TimerScheduler {
   /**
    * Settle an in-flight run that was never settled (an unforeseen startRun rejection outside
    * its failCreate paths): marks it settled in memory and finalizes the state file record as
-   * failed/create_failed via onRunEnd (removes it from activeRuns). Idempotent — an
+   * failed/create_failed via onRunEnd (removes it from activeRuns). Idempotent - an
    * already-settled run is left untouched. A persistence failure inside the settlement must
-   * not escape the caller's guard (the in-memory run is already settled — no zombie
+   * not escape the caller's guard (the in-memory run is already settled - no zombie
    * survives either way).
    */
   private settleUnsettledRun(model: JobModel, run: RunRecord, error: string, nowMs: number): void {
@@ -282,7 +282,7 @@ export class TimerScheduler {
 
   private onRunEnd(model: JobModel, run: RunRecord, outcome: RunOutcome): void {
     // Offload (retention plane) settle hook: clears the in-flight mark for every settled
-    // run (all outcomes, including create_failed and runs of deleted jobs — above the
+    // run (all outcomes, including create_failed and runs of deleted jobs - above the
     // deleted-job early return, independent of the state-file bookkeeping).
     if (this.offload !== undefined) this.offload.onRunSettled(model.id, run.sessionId)
     const set = this.activeRuns.get(model.id)
@@ -300,7 +300,7 @@ export class TimerScheduler {
     }
     if (model.deleted) return // run of a deleted job: settle but do not write state or recompute
     // Settlement target: the model in the enabled registry when the job is (or became)
-    // enabled — an in-flight run of a job that was disabled and re-enabled settles into the
+    // enabled - an in-flight run of a job that was disabled and re-enabled settles into the
     // (same-address) model's enabled state; otherwise the model the run was started with
     // (the enabled model itself, or the disabled registry model for a disabled job).
     const live = this.jobs.get(model.id)
@@ -310,7 +310,7 @@ export class TimerScheduler {
     // updateRun takes the upsert branch; without startedAt, jobDetail's formatWall would throw
     // "Invalid time value".
     // Normally onRunStart already pushed the in-flight record, so updateRun merges in place and
-    // this field has the same value as record0 — zero behavior change.
+    // this field has the same value as record0 - zero behavior change.
     updateRun(target.state, run.runId, {
       startedAt: run.startedAt,
       status: outcome.status,
@@ -322,7 +322,7 @@ export class TimerScheduler {
     })
     // Deactivation recompute: runs only when this settlement is the job's deactivation
     // (the settled run was the last in-flight run, so the in-flight set is empty once it
-    // is removed, as above — systemd v262's re-arm-on-deactivation, timer.c
+    // is removed, as above - systemd v262's re-arm-on-deactivation, timer.c
     // timer_trigger_notify case TIMER_RUNNING). Non-suspended
     // conditions are maintained in place at their elapse moments (fire or consume sites),
     // so at deactivation they already hold a next trigger strictly in the future and the
@@ -353,7 +353,7 @@ export class TimerScheduler {
    * TIMER_SESSION_RETENTION env, parsed once at construction; 0 when the env is absent
    * or invalid); an explicit invalid value warns (deduplicated per distinct raw value,
    * so a persistently invalid file does not warn every round) and resolves to 0 (the
-   * default does not rescue an explicit invalid value) — the schema validates the type
+   * default does not rescue an explicit invalid value) - the schema validates the type
    * only; the syntax is judged by the retention parser. The job-file values are read
    * live per sweep round: a hot-updated job file changes its window without a restart
    * (the env default is boot-fixed like every other plugin env).
@@ -387,7 +387,7 @@ export class TimerScheduler {
     return windows
   }
 
-  // ── Scan ──────────────────────────────────────────────────
+  // -- Scan --------------------------------------------------
 
   /** Iterate models of both registries (enabled + disabled); disabled jobs are display-only
    * (recompute + persist to keep the mirror fresh), never scheduled. */
@@ -413,9 +413,9 @@ export class TimerScheduler {
   }
 
   /**
-   * State reload for hot update / re-enable (F7): valid file → adopt the file content;
-   * corrupt file → enabled jobs reset to fresh state + state note, disabled jobs keep the
-   * in-memory state + display-only note; file missing (ENOENT) → keep the in-memory state
+   * State reload for hot update / re-enable: valid file -> adopt the file content;
+   * corrupt file -> enabled jobs reset to fresh state + state note, disabled jobs keep the
+   * in-memory state + display-only note; file missing (ENOENT) -> keep the in-memory state
    * (the file is rebuilt on the next persist).
    */
   private async reloadJobState(model: JobModel): Promise<void> {
@@ -440,7 +440,7 @@ export class TimerScheduler {
 
   /**
    * Cancel one in-progress run: mark it cancelled and send the agent cancel.
-   * First-recorded cause wins — a run already carrying a pending cause (e.g. a concurrent
+   * First-recorded cause wins - a run already carrying a pending cause (e.g. a concurrent
    * runtimeMaxSec timeout mark, or an earlier overlap 'stop' / disable / cancel mark) is left
    * untouched, so its settlement keeps the original cause and error attribution.
    * Shared by all cancel paths (overlap 'stop' tick, disable --now, cancel verb).
@@ -533,19 +533,19 @@ export class TimerScheduler {
    * rule). The in-memory model is preferred when one is loaded; else the on-disk spec (the
    * verb already confirmed the file exists); an unparseable on-disk spec fails closed on
    * both axes (assume the top level, unknown run root). null = no policy world to resolve
-   * against (host without the sandbox-policy service) — then every check is skipped.
+   * against (host without the sandbox-policy service) - then every check is skipped.
    */
   private async existingJobLevels(idKey: string, caller: CallerContext | undefined): Promise<{ policy: Policy | null; runRoot: string | null }> {
     const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
     if (model) return { policy: modelJobPolicy(model, caller), runRoot: runRootOfSpec(model.spec) }
     if (!caller || !caller.hasPolicyWorld || caller.defaultMode === null) return { policy: null, runRoot: null }
     const base = await this.readJobSpecFile(this.jobFileOf(idKey))
-    if (base === null) return { policy: 'danger-full-access', runRoot: null } // unparseable on-disk spec → assume the top level (fail closed)
+    if (base === null) return { policy: 'danger-full-access', runRoot: null } // unparseable on-disk spec -> assume the top level (fail closed)
     return { policy: specRunPolicy(base.obj) ?? caller.defaultMode, runRoot: runRootOfSpec(base.obj) }
   }
 
   /**
-   * Full rescan of jobsDir: add / hot-update / enable↔disabled flip / remove / reject.
+   * Full rescan of jobsDir: add / hot-update / enable<->disabled flip / remove / reject.
    * One file per id; the `enable` field decides the bucket (absent or true = enabled,
    * false = disabled). Validation takes precedence over the enable bucket: a broken spec is
    * rejected regardless of `enable` (enable: false + broken spec = rejected, not disabled),
@@ -555,17 +555,17 @@ export class TimerScheduler {
    * the persistent rebase window and running anchors);
    * "unchanged" is an order-independent (canonical key-sorted) comparison, so a key-reordered
    * no-op rewrite (formatter / tool re-serialization) is not read as a change;
-   * jobs whose spec changed are hot-updated in place (stable model object → running runs'
+   * jobs whose spec changed are hot-updated in place (stable model object -> running runs'
    * anchors stay valid); state reload keeps the in-memory state when the state file is
    * missing (ENOENT; the file is rebuilt on the next persist) and resets it when the state
    * file is corrupt (enabled jobs) or keeps it with a display-only note (disabled jobs).
-   * enabled→disabled flip: cancel the job's in-progress runs first (disable --now
+   * enabled->disabled flip: cancel the job's in-progress runs first (disable --now
    * adaptation; runs already carrying a pending cause are not cancelled twice), then move
    * the model into the disabled registry;
-   * disabled→enabled flip: move the model into the trigger table (onStartupSec in-process
+   * disabled->enabled flip: move the model into the trigger table (onStartupSec in-process
    * mark preserved via startupMemory) and re-arm per the re-enable rules;
    * removal from disk: mark the model deleted and unlink the state file; in-progress runs
-   * are not cancelled — they settle without writing state or recomputing.
+   * are not cancelled - they settle without writing state or recomputing.
    */
   private async rescan(): Promise<RescanSummary> {
     let entries: string[]
@@ -606,7 +606,7 @@ export class TimerScheduler {
       const inJobs = this.jobs.get(id)
       if (inJobs) {
         if (!enabled) {
-          // enabled → disabled: hot-update the spec first (in-place; symmetric with the other
+          // enabled -> disabled: hot-update the spec first (in-place; symmetric with the other
           // two migration paths, so a spec change made in the same edit is visible in the
           // disabled job's status detail immediately, without waiting for the next rescan),
           // then cancel in-progress runs (disable --now adaptation), then move the model
@@ -630,7 +630,7 @@ export class TimerScheduler {
           // (avoids disturbing the persistent rebase window and running anchors).
           continue
         }
-        // Config hot update (in-place; stable model object → running runs' anchors stay valid)
+        // Config hot update (in-place; stable model object -> running runs' anchors stay valid)
         this.applySpecUpdate(inJobs, v)
         await this.reloadJobState(inJobs)
         this.buildCalendars(inJobs, nowMs)
@@ -652,7 +652,7 @@ export class TimerScheduler {
           this.voidSafePersist(inDisabled)
           continue
         }
-        // disabled → enabled: move the model into the trigger table (onStartupSec in-process
+        // disabled -> enabled: move the model into the trigger table (onStartupSec in-process
         // mark preserved via startupMemory); state reload then follows the enabled rule.
         if (canonicalJson(v.spec) !== canonicalJson(inDisabled.spec)) this.applySpecUpdate(inDisabled, v)
         this.disabledJobs.delete(id)
@@ -661,7 +661,7 @@ export class TimerScheduler {
         await this.reloadJobState(inDisabled)
         this.buildCalendars(inDisabled, nowMs)
         this.voidSafePersist(inDisabled)
-        this.logger.info(`job=${id} enabled (enable: false → true)`)
+        this.logger.info(`job=${id} enabled (enable: false -> true)`)
         continue
       }
       // New job (in neither registry)
@@ -681,7 +681,7 @@ export class TimerScheduler {
     }
 
     // Removal from disk: the model is marked deleted and removed from both registries; the
-    // state file is unlinked; in-progress runs are NOT cancelled — they settle without
+    // state file is unlinked; in-progress runs are NOT cancelled - they settle without
     // writing state or recomputing (audit trail = the session log).
     for (const [id, model] of [...this.jobs]) {
       if (present.has(id)) continue
@@ -706,7 +706,7 @@ export class TimerScheduler {
     return summary
   }
 
-  // ── Tick ──────────────────────────────────────────────────
+  // -- Tick --------------------------------------------------
 
   private tick(): void {
     // Exit race: an interval callback queued before stop() may fire inside stop()'s
@@ -715,7 +715,7 @@ export class TimerScheduler {
     const nowMs = Date.now()
     const mono = process.hrtime.bigint()
 
-    // 1) Clock rewind: wall delta - monotonic delta < -1s → full recompute
+    // 1) Clock rewind: wall delta - monotonic delta < -1s -> full recompute
     const wallDelta = nowMs - this.prevTickWall
     const monoDeltaMs = Number(mono - this.prevTickMono) / 1e6
     if (wallDelta - monoDeltaMs < -CLOCK_JUMP_MS) {
@@ -725,7 +725,7 @@ export class TimerScheduler {
       for (const model of this.allModels()) {
         if (model.deleted) continue
         // systemd on_clock_change: the shared last trigger moment is clamped to the new
-        // now (stored in place — a future anchor would re-arm a past phase).
+        // now (stored in place - a future anchor would re-arm a past phase).
         // The out-of-process twin = the buildCalendars clamp at load (the tick cannot
         // see a rewind that happened while the process was stopped).
         if (model.state.lastTriggerMs !== null && model.state.lastTriggerMs > nowMs) {
@@ -750,7 +750,7 @@ export class TimerScheduler {
       if (dec.tz === null) {
         this.logger.warn('system timezone change detected but the new timezone could not be decoded; the process Intl timezone stays the old value until restart, and calendar recomputation still uses the old timezone')
       } else {
-        this.logger.info(`system timezone changed → ${dec.tz} (source ${dec.source}); calendar conditions without a job-level timeZone recomputed under the new timezone (naive-ISO wall times re-resolved, zoned ISO unaffected)`)
+        this.logger.info(`system timezone changed -> ${dec.tz} (source ${dec.source}); calendar conditions without a job-level timeZone recomputed under the new timezone (naive-ISO wall times re-resolved, zoned ISO unaffected)`)
         for (const model of this.allModels()) {
           if (model.deleted || model.spec.timeZone !== undefined) continue
           model.tz = dec.tz
@@ -784,13 +784,13 @@ export class TimerScheduler {
       if (expired.length === 0 && !monoFire && !startupFire) continue
 
       // 4) Overlap handling (runs owned by this model only: a recreated same-id job does not
-      // inherit a stale generation's in-flight runs — see ownedRuns)
+      // inherit a stale generation's in-flight runs - see ownedRuns)
       const active = this.ownedRuns(model)
       if (active.length > 0) {
         if (model.overlap === 'skip') {
           // Consume (systemd-faithful, overlap=skip): due elapses are consumed in place
-          // at the skip site — the phase advances at the elapse moment, no catch-up fire
-          // after the run ends (a run longer than the interval swallows grid points — the
+          // at the skip site - the phase advances at the elapse moment, no catch-up fire
+          // after the run ends (a run longer than the interval swallows grid points - the
           // condition's scheduled trigger instants).
           // Monotonic due moments (onActiveSec/onStartupSec) are not phase-bearing: they
           // simply stay due and retry on later ticks until the run ends.
@@ -832,12 +832,12 @@ export class TimerScheduler {
 
       // Arrow wrappers bind this (passing a raw method reference would lose this; the
       // runner calls the callbacks bare). The kickoff is DETACHED: the tick never awaits
-      // create settlement — a hung create must not delay this tick's remaining jobs or
+      // create settlement - a hung create must not delay this tick's remaining jobs or
       // later ticks. Every settlement is owned by the run itself: the CREATE_TIMEOUT_MS
       // deadline timer is the only escape for a hung create, failCreate / onRunEnd settle
       // the run and its state file, and a process restart backfills a record the previous
       // process could not settle. The .then continuation runs at create settlement time
-      // (milliseconds for a fast failure, up to the deadline for a hung create) — it only
+      // (milliseconds for a fast failure, up to the deadline for a hung create) - it only
       // handles what onRunEnd cannot: the create_failed fire bookkeeping.
       void startRun({ ctx: this.ctx, logger: this.logger, model, run, onRunStart: (m, rr, rec) => this.onRunStart(m, rr, rec), onRunEnd: (m, rr, o) => this.onRunEnd(m, rr, o), offload: this.offloadDispatch }).then(
         (r) => {
@@ -846,7 +846,7 @@ export class TimerScheduler {
         (err) => {
           // Defense in depth: startRun's contract is to settle every create failure
           // through failCreate and never reject; if an unforeseen path still rejects,
-          // contain it to this job — settle the in-flight run so no zombie record
+          // contain it to this job - settle the in-flight run so no zombie record
           // survives, then bookkeep exactly like create_failed.
           const createError = `unexpected startRun rejection: ${fmtErr(err)}`
           this.logger.error(`job=${model.id} ${createError}`)
@@ -857,20 +857,20 @@ export class TimerScheduler {
     }
   }
 
-  // ── Start / Stop ──────────────────────────────────────────
+  // -- Start / Stop ------------------------------------------
 
-  /** Start scheduling: create the state directory (best-effort mirror; failure degrades persistence, never blocks scheduling) → first scan → backfill unfinished runs from the previous process → start the tick timer and directory watch. */
+  /** Start scheduling: create the state directory (best-effort mirror; failure degrades persistence, never blocks scheduling) -> first scan -> backfill unfinished runs from the previous process -> start the tick timer and directory watch. */
   async start(): Promise<void> {
     try {
       await fsp.mkdir(stateDirFor(this.jobsDir), { recursive: true })
     } catch (err) {
       // The state directory is a best-effort mirror: when it cannot be created, scheduling
       // continues and every per-job state write fails individually (surfaced via stateNote + warn).
-      this.logger.warn(`failed to create state directory ${stateDirFor(this.jobsDir)}: ${errMsg(err)} — state persistence degraded`)
+      this.logger.warn(`failed to create state directory ${stateDirFor(this.jobsDir)}: ${errMsg(err)} - state persistence degraded`)
     }
     await this.rescan()
     // Backfill: runs with status=running in state files must belong to the previous process
-    // (this process's in-memory activeRuns is empty) → backfill as failed/interrupted; applies
+    // (this process's in-memory activeRuns is empty) -> backfill as failed/interrupted; applies
     // to both registries (a disabled job's state file may carry a stale in-flight record from
     // a manual run interrupted mid-flight)
     let backfilled = 0
@@ -893,7 +893,7 @@ export class TimerScheduler {
     if (backfilled > 0) this.logger.info(`backfilled ${backfilled} unfinished run(s) from the previous process as failed/interrupted`)
     // Timers go through the cordis timer service (fiber effects; reclaimed automatically on package dispose)
     this.tickDispose = this.ctx.interval(() => {
-      // Single-flight reentrancy guard: tick() is synchronous (no suspension points —
+      // Single-flight reentrancy guard: tick() is synchronous (no suspension points -
       // create settlement is a detached self-settling lifecycle), so an overlapping
       // interval firing is structurally unreachable today; the guard stays as protection
       // against a future async re-introduction.
@@ -928,9 +928,9 @@ export class TimerScheduler {
   /**
    * Stop scheduling and deterministically settle every in-flight run (the graceful-exit
    * mechanism; startup backfill remains the crash/kill net). Order matters: the tick loop,
-   * reload debounce, and directory watch are disposed first — disposing the interval
+   * reload debounce, and directory watch are disposed first - disposing the interval
    * cancels the pending period in O(1) (no tick-period wait), and the tick's stopped
-   * guard makes a late callback a no-op — so no new run can be dispatched afterwards.
+   * guard makes a late callback a no-op - so no new run can be dispatched afterwards.
    * Every unsettled run is then settled as failed: first-recorded-cause-wins (a
    * pre-existing cancelled/timeout cause beats the exit mark), the error mapping is
    * identical to the runner's whenIdle settlement so both mechanisms write the same
@@ -1025,7 +1025,7 @@ export class TimerScheduler {
     }
   }
 
-  // ── Verbs ─────────────────────────────────────────────────
+  // -- Verbs -------------------------------------------------
 
   /** Shared line builder for the pinned `rescan complete: enabled N, disabled N, rejected N`
    * report line; the rescan log and the reload verb report both use it so the two can never
@@ -1077,7 +1077,7 @@ export class TimerScheduler {
     const future = cands
       .filter((c): c is { at: number; label: string } => c.at !== null && c.at > nowMs)
       .sort((a, b) => a.at - b.at)
-    if (future.length > 0) return `${formatWall(future[0].at, model.tz)} ← ${future[0].label}`
+    if (future.length > 0) return `${formatWall(future[0].at, model.tz)} <- ${future[0].label}`
     // Sort due candidates by time so the reported label is the EARLIEST due condition, not
     // merely the first one in calendar order.
     const due = cands
@@ -1130,7 +1130,7 @@ export class TimerScheduler {
       for (const r of recent) {
         const cause = r.cause ? ` (${r.cause})` : ''
         lines.push(
-          `recent run: ${r.status}${cause}, started ${formatWall(r.startedAt, model.tz)}${r.finishedAt ? `, finished ${formatWall(r.finishedAt, model.tz)}` : ' (in progress)'}${r.durationMs !== null ? `, duration ${r.durationMs}ms` : ''}, runId=${r.runId}, sessionId=${r.sessionId ?? '—'}`,
+          `recent run: ${r.status}${cause}, started ${formatWall(r.startedAt, model.tz)}${r.finishedAt ? `, finished ${formatWall(r.finishedAt, model.tz)}` : ' (in progress)'}${r.durationMs !== null ? `, duration ${r.durationMs}ms` : ''}, runId=${r.runId}, sessionId=${r.sessionId ?? '-'}`,
         )
         if (r.summary) lines.push(`summary: ${r.summary}`)
         if (r.error) lines.push(`error: ${r.error}`)
@@ -1148,7 +1148,7 @@ export class TimerScheduler {
   /**
    * status: id omitted = overview (three buckets: enabled / disabled / rejected + in-progress
    * runs); id present = single-job detail (enabled and disabled jobs both use their in-memory
-   * models — no temporary file reads; rejected and missing ids report the reason / absence).
+   * models - no temporary file reads; rejected and missing ids report the reason / absence).
    */
   async statusText(id?: string): Promise<string> {
     if (id !== undefined) {
@@ -1185,7 +1185,7 @@ export class TimerScheduler {
 
   /**
    * run: manually trigger one run (disabled jobs allowed too: their in-memory disabled
-   * registry model is used directly — spec and enabled state live in the same file, so no
+   * registry model is used directly - spec and enabled state live in the same file, so no
    * temporary model is built; settlement records state into the job's state file as usual).
    * Manual runs have no fire accounting: create_failed is only recorded, no retry is triggered.
    */
@@ -1200,7 +1200,7 @@ export class TimerScheduler {
     }
     // Privilege check before the run starts: manually triggering a job
     // that runs at a level above the caller's, or outside the caller's run-root scope, is
-    // an escalation — through the approval channel.
+    // an escalation - through the approval channel.
     await checkCallerPrivilege(caller, { verb: 'run', jobId: idKey, jobPolicy: modelJobPolicy(model, caller), runRoot: runRootOfSpec(model.spec) })
     const isDisabled = !this.jobs.has(idKey)
     const run = newRunRecord({ jobId: idKey, trigger: 'manual', startedAt: nowMs })
@@ -1215,7 +1215,7 @@ export class TimerScheduler {
       if (!r.ok) createError = r.error
     } catch (err) {
       // Same defense-in-depth guard as the tick path: an unforeseen startRun rejection is
-      // contained to this run — settled so no zombie record survives — and reported to the
+      // contained to this run - settled so no zombie record survives - and reported to the
       // caller as a create_failed.
       createError = `unexpected startRun rejection: ${fmtErr(err)}`
       this.logger.error(`job=${idKey} ${createError}`)
@@ -1229,14 +1229,14 @@ export class TimerScheduler {
 
   /**
    * enable / disable (= disable --now): optimistic read-modify-write of the job file's
-   * `enable` field (read → parse → change only `enable` → re-read → the canonical JSON must
-   * still match the read baseline, otherwise retry once; still conflicting → not written,
+   * `enable` field (read -> parse -> change only `enable` -> re-read -> the canonical JSON must
+   * still match the read baseline, otherwise retry once; still conflicting -> not written,
    * and no run is cancelled: the conflict path has no side effect).
    * disable = disable --now adaptation: write enable: false first; only once the write
    * succeeds are the job's in-progress runs cancelled (recorded as failed/cancelled at
    * settlement); enable = enable: true. After the write the verb triggers one immediate
    * rescan (manual file edits go through the fs.watch debounce instead); the rescan's
-   * enabled→disabled flip cancels any runs the verb did not cancel (runs already carrying
+   * enabled->disabled flip cancels any runs the verb did not cancel (runs already carrying
    * a pending cause are not cancelled twice).
    */
   async setEnabled(id: string | undefined, enabled: boolean, caller?: CallerContext): Promise<string> {
@@ -1247,7 +1247,7 @@ export class TimerScheduler {
     if (!this.jobs.has(idKey) && !this.disabledJobs.has(idKey)) throw new Error(this.jobNotFoundMsg(idKey))
     // Privilege check before the file write (both directions): enabling a job that runs
     // at a level above the caller's schedules future runs at that level, and disabling or
-    // stopping such a job — like cancelling its runs — is equally gated: a session outside
+    // stopping such a job - like cancelling its runs - is equally gated: a session outside
     // the job's run root or below its level must not stop or rewrite another scope's job,
     // system-critical ones included. Both route through the approval channel.
     const model = this.jobs.get(idKey) ?? this.disabledJobs.get(idKey)
@@ -1263,7 +1263,7 @@ export class TimerScheduler {
     let written = false
     for (let attempt = 0; attempt < 2 && !written; attempt++) {
       const base = await this.readJobSpecFile(jsonFile)
-      if (base === null) continue // file missing / unparseable → treat as a concurrent change, retry
+      if (base === null) continue // file missing / unparseable -> treat as a concurrent change, retry
       const { canon: baseCanon, obj } = base
       obj.enable = enabled
       const current = await this.readJobSpecFile(jsonFile)
@@ -1289,17 +1289,17 @@ export class TimerScheduler {
   /**
    * add = create only: the job file must not exist yet. An existing id is rejected without
    * touching its spec or state file (accidental overwrite would lose the job's config and
-   * state); to replace a job, delete it first (timer delete) and add again — the delete
+   * state); to replace a job, delete it first (timer delete) and add again - the delete
    * also removes the state file, so next-fire times and one-shot marks do not survive.
    * The spec is validated, then a spec that omits run.cwd inherits the creating session's
    * workspace itself, and the inherited value is materialized into the stored spec, so the
    * job file is self-describing and the runner and the privilege check read one value from
    * it. A spec that sets run.cwd to a string is stored as given; a null or omitted
    * run.cwd enters the inheritance rule above. A creating session
-   * without a cwd → refused locally fail-closed.
-   * The resulting enabled state is the new spec's `enable` field (absent → enabled; explicit
-   * false → disabled).
-   * Invalid spec → throw, file not written (no last-good; consistent with the whole-rejection semantics).
+   * without a cwd -> refused locally fail-closed.
+   * The resulting enabled state is the new spec's `enable` field (absent -> enabled; explicit
+   * false -> disabled).
+   * Invalid spec -> throw, file not written (no last-good; consistent with the whole-rejection semantics).
    */
   async addJob(id: string | undefined, spec: unknown, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id, 'starts with a lowercase letter or digit, may contain hyphens, max 64 characters')
@@ -1351,16 +1351,16 @@ export class TimerScheduler {
   }
 
   /**
-   * update = update only: the job file must exist (an unknown id is rejected — add creates
+   * update = update only: the job file must exist (an unknown id is rejected - add creates
    * it). The whole spec is replaced in place (no field-level patch), and the state file is
    * preserved, exactly like a manual edit of the job file: run history, phase anchors and
    * one-shot marks survive (the update's run.cwd handling is at the inline site in the
    * method); a changed trigger definition reschedules from the existing anchor, and stale
    * state fields of a changed trigger kind are ignored. In-progress runs
    * keep executing the spec they started with; the new spec applies at the next trigger (an
-   * enabled→disabled flip in the new spec still cancels them at the rescan, like every other
+   * enabled->disabled flip in the new spec still cancels them at the rescan, like every other
    * disabled write).
-   * Invalid spec → throw, existing file untouched (no last-good; whole-rejection semantics).
+   * Invalid spec -> throw, existing file untouched (no last-good; whole-rejection semantics).
    */
   async updateJob(id: string | undefined, spec: unknown, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
@@ -1376,7 +1376,7 @@ export class TimerScheduler {
     }
     if (!exists) throw new Error(`job ${idKey} not found; add creates it (timer add id=${idKey})`)
     // Privilege check before any file effect: the update must clear BOTH
-    // levels — the job's existing level (a lower-level session may not touch a higher-level
+    // levels - the job's existing level (a lower-level session may not touch a higher-level
     // job at all, not even to demote or rewrite its prompt) and the level the new spec
     // results in.
     const newPolicy = effectiveJobPolicy(spec, caller)
@@ -1388,7 +1388,7 @@ export class TimerScheduler {
     // An update that omits or nulls run.cwd keeps the job's existing run root: the value is
     // materialized into the stored spec so the file stays self-describing (the same shape as
     // the add-time inheritance). A job whose existing root is undetermined stays
-    // undetermined — the update does not worsen it, and its management still fails closed.
+    // undetermined - the update does not worsen it, and its management still fails closed.
     const storedSpec =
       typeof specRunCwd(spec) !== 'string' && runRoot !== null ? this.withRunCwdValue(spec, runRoot) : spec
     await checkCallerPrivilege(caller, { verb: 'update', jobId: idKey, jobPolicy, runCwd: specRunCwd(spec), runRoot })
@@ -1402,7 +1402,7 @@ export class TimerScheduler {
    * prevents a same-name rebuild from inheriting stale one-shot marks / next-fire times /
    * lastActivation); the in-memory model (enabled or disabled) is marked deleted and removed
    * from both registries (in-progress runs continue to settle but do not write state or
-   * recompute — the audit trail is the session log).
+   * recompute - the audit trail is the session log).
    */
   async deleteJob(id: string | undefined, caller?: CallerContext): Promise<string> {
     const idKey = this.assertJobId(id)
@@ -1420,7 +1420,7 @@ export class TimerScheduler {
     if (!filePresent) throw new Error(this.jobNotFoundMsg(idKey))
     // Privilege check before the file is removed: deleting a job above the
     // caller's level, or outside the caller's run-root scope, destroys an artifact of
-    // another actor — through the approval channel.
+    // another actor - through the approval channel.
     const { policy: existingPolicy, runRoot } = await this.existingJobLevels(idKey, caller)
     await checkCallerPrivilege(caller, { verb: 'delete', jobId: idKey, jobPolicy: existingPolicy, runRoot })
     let removedFile = false
@@ -1445,7 +1445,7 @@ export class TimerScheduler {
 
   /**
    * cancel: cancel all in-progress runs of the job (mark cancelled + agent cancel; first-recorded
-   * cause wins, see markCancelled). N counts the in-progress runs the verb handles — runs newly
+   * cause wins, see markCancelled). N counts the in-progress runs the verb handles - runs newly
    * marked here plus runs already carrying a pending cause that are left untouched, so a
    * concurrent timeout keeps its failed/timeout attribution.
    * The privilege check runs before the no-op detection, so the gate is uniform: a session

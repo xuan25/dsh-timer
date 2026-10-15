@@ -79,7 +79,7 @@ export function parseOffloadBatch(raw: string | undefined, warn: (m: string) => 
 /**
  * Parse the TIMER_SESSION_RETENTION env value (the unit-default retention window,
  * applied to every job whose run.sessionRetention is unset: absent or null).
- * Absent: 0 (no default window, no warning); present: R6 window syntax on a
+ * Absent: 0 (no default window, no warning); present: a duration window on a
  * string (pure-number strings are invalid by design; the value must be a
  * duration like 24h); invalid: a warning and 0 (never disables the plane).
  */

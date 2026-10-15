@@ -63,7 +63,7 @@ export interface JobSpec {
   /** null / "0" / "infinity" / positive time span (all = no limit; non-string values are rejected). */
   runtimeMaxSec?: string | null
   /** Overlap policy: skip (default) = a due trigger while a run is in progress is consumed
-   * (skipped and consumed in place: the phase advances at the due moment, no catch-up fire —
+   * (skipped and consumed in place: the phase advances at the due moment, no catch-up fire -
    * a run longer than the interval swallows grid points, the condition's scheduled trigger
    * instants); stop = cancel the running run then start a new one; allow = run in parallel. */
   overlap?: 'skip' | 'stop' | 'allow'
@@ -95,7 +95,7 @@ export interface RunRecord {
   runId: string
   finishedAt: number
   status: RunStatus | null
-  /** finished → null; failed → timeout/cancelled/interrupted/create_failed/turn_error/… */
+  /** finished -> null; failed -> timeout/cancelled/interrupted/create_failed/turn_error/... */
   cause: string | null
   /** Pending settlement cause for an in-flight run (timeout / cancelled / interrupted). */
   pendingCause: 'timeout' | 'cancelled' | 'interrupted' | null
@@ -143,7 +143,7 @@ export interface JobModel {
   monotonicSpanMs: number | null
   /** onStartupSec span (ms); null = unset. */
   startupSpanMs: number | null
-  /** onStartupSec already fired in this process (kept across disable→enable). */
+  /** onStartupSec already fired in this process (kept across disable->enable). */
   startupConsumed: boolean
   /** onCalendar condition set (same elements as valid.calendars). */
   calendars: CalCond[]
@@ -166,7 +166,7 @@ export interface RescanSummary {
 /**
  * Offload (retention plane) hooks the scheduler invokes on the run lifecycle. The plugin
  * wires these to the OffloadSweeper. All three are optional (absent = offload inactive):
- * the scheduler treats the hooks as fire-and-forget observability — a hook throwing must not
+ * the scheduler treats the hooks as fire-and-forget observability - a hook throwing must not
  * disturb run scheduling (the plugin wraps them defensively).
  */
 export interface SchedulerOffloadHooks {
@@ -198,7 +198,7 @@ export interface SchedulerOptions {
 /** cordis Logger facade (return type of ctx.logger()). */
 export type { Logger } from '@deepseek-ai/cordis'
 
-// ── validateJob results (discriminated union: ok distinguishes success/failure) ──
+// -- validateJob results (discriminated union: ok distinguishes success/failure) --
 
 /** Validation success: carries normalized scheduling parameters and calendar condition objects. */
 export interface ValidateSuccess {
@@ -213,11 +213,11 @@ export interface ValidateSuccess {
   defer: boolean
   /** Default 'skip'. */
   overlap: 'skip' | 'stop' | 'allow'
-  /** "0" / "infinity" / unset → null; invalid input never reaches this branch. */
+  /** "0" / "infinity" / unset -> null; invalid input never reaches this branch. */
   runtimeMaxMs: number | null
-  /** onActiveSec span (ms); unset → null. */
+  /** onActiveSec span (ms); unset -> null. */
   onUnitActiveSecMs: number | null
-  /** onStartupSec span (ms); unset → null. */
+  /** onStartupSec span (ms); unset -> null. */
   onStartupSecMs: number | null
   calendars: CalendarCondition[]
   /** List of neverMatch condition values (accepted and flagged). */

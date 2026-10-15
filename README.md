@@ -29,13 +29,13 @@ No configuration is required: the plugin registers itself and reads jobs from th
 The plugin resolves the job directory in the following order:
 
 1. Explicit candidates, in this order: the `jobsDir` plugin config value, then the environment variable `DSH_TIMER_JOBS_DIR`. If a designated candidate is unavailable, the plugin start fails hard.
-2. The default directory `<profileDir>/timers`, used only when no candidate is designated, where `profileDir` is the dsh profile directory that hosts the plugin. The profile is detected from the plugin's install location, or — when the plugin lives outside any install tree — from the running process's harness home (`$DSH_HOME`, resolved through the framework-provided `dshHomePath` service) by the framework's `dsh-profile-<name>` profile naming; exactly one profile must be found. If the resulting directory is unavailable, the plugin writes a log entry and starts degraded: no jobs are loaded and no state is persisted until the directory is fixed and reloaded.
+2. The default directory `<profileDir>/timers`, used only when no candidate is designated, where `profileDir` is the dsh profile directory that hosts the plugin. The profile is detected from the plugin's install location, or - when the plugin lives outside any install tree - from the running process's harness home (`$DSH_HOME`, resolved through the framework-provided `dshHomePath` service) by the framework's `dsh-profile-<name>` profile naming; exactly one profile must be found. If the resulting directory is unavailable, the plugin writes a log entry and starts degraded: no jobs are loaded and no state is persisted until the directory is fixed and reloaded.
 3. If no candidate is designated and no unique profile can be determined (zero or multiple profiles found, or the host does not provide the harness-home service), the plugin start throws; the error points at the explicit overrides from item 1, plus a `jobsDir` entry in the profile's `cordis.patch.yml` (a `!!js` loader expression, e.g. `dshHomePath('profiles','<name>','timers')`, shown below). A development directory that lives outside the profile must be designated through candidate 1.
 
-The last channel above can be written as a loader expression. A `!!js` value in a plugin config is a YAML scalar tagged with the loader-expression tag: when the plugin entry activates, the loader evaluates the expression in a scope where every framework service — including `dshHomePath`, the harness-home path resolver — is available as an identifier, and the expression's result replaces the value:
+The last channel above can be written as a loader expression. A `!!js` value in a plugin config is a YAML scalar tagged with the loader-expression tag: when the plugin entry activates, the loader evaluates the expression in a scope where every framework service - including `dshHomePath`, the harness-home path resolver - is available as an identifier, and the expression's result replaces the value:
 
 ```yaml
-# <profileDir>/cordis.patch.yml — pin the job directory from the profile layer
+# <profileDir>/cordis.patch.yml - pin the job directory from the profile layer
 - id: dsh-timer
   config:
     jobsDir: !!js dshHomePath('profiles', '<name>', 'timers')
@@ -45,7 +45,7 @@ Here `<name>` is the profile directory name under the harness home. A patch entr
 
 ### Run root
 
-A job's run root is the working directory its run session is created in, and — under the plugin's privilege model — the job's control scope: a session outside that root (and below full access) manages the job only through the approval channel. The run root is the spec's explicit `run.cwd`; an `add` without one inherits the creating session's workspace itself (`<session-cwd>`) and persists the inherited value into the job file, so a job created through the plugin always carries its run root in its own file. A job whose spec sets no `run.cwd` has an undetermined run root: managing it fails closed through the approval channel, and its runs fail `create_failed` with the actionable remedy (set `run.cwd` in the job file).
+A job's run root is the working directory its run session is created in, and - under the plugin's privilege model - the job's control scope: a session outside that root (and below full access) manages the job only through the approval channel. The run root is the spec's explicit `run.cwd`; an `add` without one inherits the creating session's workspace itself (`<session-cwd>`) and persists the inherited value into the job file, so a job created through the plugin always carries its run root in its own file. A job whose spec sets no `run.cwd` has an undetermined run root: managing it fails closed through the approval channel, and its runs fail `create_failed` with the actionable remedy (set `run.cwd` in the job file).
 
 The plugin ships no host-absolute run path of its own: every run root is either the caller's session fact or the spec's own explicit value.
 
@@ -58,7 +58,7 @@ The directory layout is as follows:
 | a job file that fails to parse or fails validation | the id is rejected and the reason is reported in `status`; the plugin keeps no last-good state |
 | any other file name or subdirectory | ignored and never rejected |
 
-A job id must match `^[a-z0-9][a-z0-9-]{0,63}$` — a lowercase letter or a digit first, then up to 63 lowercase letters, digits, or hyphens.
+A job id must match `^[a-z0-9][a-z0-9-]{0,63}$` - a lowercase letter or a digit first, then up to 63 lowercase letters, digits, or hyphens.
 
 The plugin watches the job directory with a 500 ms debounce and rescans on any change; the `reload` verb of the `timer` tool forces the same rescan. A job that is disabled, or whose spec becomes invalid, while a run is in progress keeps its state file, so fixing the spec restores the job's run history.
 
@@ -69,17 +69,17 @@ The table below is a quick reference; see `schemas/job.schema.json` for the comp
 | Field | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `enable` | boolean | `true` | When `false`, the job is stored disabled in the same file: it is never scheduled, but it can still be run manually and re-enabled by flipping the field. |
-| `onCalendar` | `string[]` or `null` | — | Each entry is a 5/6-field cron expression (strict cron parsing, recurring) or a full ISO instant (one-shot). |
-| `onActiveSec` | time span or `null` | — | Counted from the last activation, which is the most recent run's start moment. |
-| `onStartupSec` | time span or `null` | — | Counted from process start and fires once per process. |
+| `onCalendar` | `string[]` or `null` | - | Each entry is a 5/6-field cron expression (strict cron parsing, recurring) or a full ISO instant (one-shot). |
+| `onActiveSec` | time span or `null` | - | Counted from the last activation, which is the most recent run's start moment. |
+| `onStartupSec` | time span or `null` | - | Counted from process start and fires once per process. |
 | `timeZone` | IANA timezone name | the system timezone | Overrides the system timezone for the job; applies only to calendar conditions. Ambiguous local times (DST folds) resolve to the first occurrence; a one-shot ISO instant inside a DST gap is rejected. |
 | `persistent` | boolean | `false` | When `true`, if a trigger was due while the process was down or the job disabled, the plugin fires exactly one catch-up run after recovery, rebased to the current moment, and re-arms from the actual trigger moment. The missed interval is not persisted. |
 | `deferReactivation` | boolean | `false` | Applies only to jobs that have onCalendar conditions (on other jobs the value is accepted and ignored). When `true`, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When `false`, the phase advances at every due moment even while a run is in progress. |
 | `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
-| `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
-| `run` | object (required) | — | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, `policy`, and `sessionRetention` are optional — full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above; `sessionRetention` is covered in the Session-offload section below). |
+| `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends - a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
+| `run` | object (required) | - | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, `policy`, and `sessionRetention` are optional - full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above; `sessionRetention` is covered in the Session-offload section below). |
 
-Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (≈ 30 days), `y`/`year(s)` (≈ 365 days) — case-sensitive (`m` is minutes, `M` is months) — where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) — a JSON number is never accepted. A span shorter than half a millisecond rounds to 0 ms and makes the job fire on every tick; prefer values of at least 1 ms.
+Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (approx. 30 days), `y`/`year(s)` (approx. 365 days) - case-sensitive (`m` is minutes, `M` is months) - where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) - a JSON number is never accepted. A span shorter than half a millisecond rounds to 0 ms and makes the job fire on every tick; prefer values of at least 1 ms.
 
 ### State file
 
@@ -118,7 +118,7 @@ A run record inside `runs` has the following keys:
 | `summary` | a summary of the run, truncated to 2000 characters |
 | `error` | the error text when the run failed |
 
-`finished` only records that the turn ended cleanly; it does not claim that the task succeeded — the outcome lives in `summary` and the session transcript. A job that has never run reports no run in status (`recent run: none (no runs yet)` in the detail, `last run: none (no runs yet)` on the overview line).
+`finished` only records that the turn ended cleanly; it does not claim that the task succeeded - the outcome lives in `summary` and the session transcript. A job that has never run reports no run in status (`recent run: none (no runs yet)` in the detail, `last run: none (no runs yet)` on the overview line).
 
 ## Managing timers
 

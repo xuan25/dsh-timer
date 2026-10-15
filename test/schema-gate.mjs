@@ -54,7 +54,7 @@ function check(label, fn) {
     console.log(`ok: ${label}`)
   } catch (e) {
     failures++
-    console.log(`FAIL: ${label} — ${e.message}`)
+    console.log(`FAIL: ${label} - ${e.message}`)
   }
 }
 const assert = (cond, msg) => { if (!cond) throw new Error(msg) }
@@ -67,7 +67,7 @@ function expectInvalid(validator, name, data) {
   assert(!r, `${name} should be INVALID`)
 }
 
-// ── job schema ──
+// -- job schema --
 check('job: valid minimal spec', () =>
   expectValid(vJob, 'job: valid minimal spec', { onCalendar: ['0 9 * * 1-5'], run: { prompt: 'p' } }))
 check('job: null triggers + null run fields with one active trigger', () =>
@@ -105,7 +105,7 @@ check('job: sessionRetention null accepted (retain)', () =>
 check('job: sessionRetention wrong type rejected', () =>
   expectInvalid(vJob, 'job: sessionRetention boolean', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: true } }))
 
-// ── state schema ──
+// -- state schema --
 const goodState = { schemaVersion: 1, jobId: 'demo', lastActivationMs: null, lastTriggerMs: null, calendars: {}, runs: [] }
 check('state: valid zero-run state', () =>
   expectValid(vState, 'state: valid zero-run state', goodState))

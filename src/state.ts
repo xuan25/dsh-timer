@@ -6,7 +6,7 @@
  *     calendars: { [value]: { value, kind, neverMatch, consumed, nextFireMs } },
  *     runs: [...] (FIFO, <= 50) }
  * No missed-fire persistence: the job-level lastTriggerMs = the last on-calendar elapse
- * moment (a fired trigger or a due trigger consumed by an overlap=skip — the recompute
+ * moment (a fired trigger or a due trigger consumed by an overlap=skip - the recompute
  * anchor, systemd's one shared last trigger moment per unit); the operator derives any
  * missed interval from that moment, the next trigger time, and the current time.
  * State files may carry unknown extra keys: they are
@@ -75,7 +75,7 @@ export interface JobState {
 
 /**
  * The state directory under the jobs directory (per-job state files live here, one
- * `<jobId>.json` each; a best-effort mirror — creating it is a scheduler concern).
+ * `<jobId>.json` each; a best-effort mirror - creating it is a scheduler concern).
  * @param jobsDir jobs directory.
  */
 export function stateDirFor(jobsDir: string): string {
@@ -117,7 +117,7 @@ export function freshState(jobId: string): JobState {
 
 /**
  * Full-shape check: true when the object is a valid state; false otherwise
- * (the caller treats false as "corrupt → reset in enabled jobs / keep in-memory state in
+ * (the caller treats false as "corrupt -> reset in enabled jobs / keep in-memory state in
  * disabled jobs").
  *
  * Validated per field:
@@ -134,7 +134,7 @@ export function freshState(jobId: string): JobState {
  * In-flight records carry explicit nulls for cause / finishedAt / durationMs / summary;
  * settled records fill them on settlement. Records evicted by the FIFO before settlement
  * are re-appended with only { runId, ...patch }, so the optional fields may be absent.
- * Unknown extra keys are TOLERATED — not corrupt;
+ * Unknown extra keys are TOLERATED - not corrupt;
  * loadState normalizes them away.
  * @param s arbitrary value (a JSON.parse product).
  */
@@ -199,8 +199,8 @@ export interface StateLoadResult {
 /**
  * Read a state file.
  * @param file state file path.
- * @returns file missing → { state: null, corrupt: false } (first load; the caller builds a fresh state);
- *   unreadable / not JSON / wrong shape → { state: null, corrupt: true }.
+ * @returns file missing -> { state: null, corrupt: false } (first load; the caller builds a fresh state);
+ *   unreadable / not JSON / wrong shape -> { state: null, corrupt: true }.
  */
 export async function loadState(file: string): Promise<StateLoadResult> {
   let text: string
@@ -248,7 +248,7 @@ export function updateRun(state: JobState, runId: string, patch: Partial<StateRu
 
 /**
  * Truncate a summary to SUMMARY_LIMIT characters.
- * @param text arbitrary value (non-string → '').
+ * @param text arbitrary value (non-string -> '').
  */
 export function truncateSummary(text: unknown): string {
   if (typeof text !== 'string') return ''

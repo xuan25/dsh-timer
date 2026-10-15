@@ -1,5 +1,5 @@
 // dsh-timer job spec validation: directory load and timer add share this single matrix
-// (one source of truth). Any failing row → the whole spec is rejected (no last-good).
+// (one source of truth). Any failing row -> the whole spec is rejected (no last-good).
 // neverMatch cron values are not rejected, only flagged.
 // The success branch returns the original validated object; the scheduler's rescan hot-update
 // comparison is order-independent (util.canonicalJson), so the file key order is not
@@ -32,7 +32,7 @@ export const POLICIES = new Set(['read-only', 'workspace-write', 'danger-full-ac
  * @param spec job spec object (arbitrary input; structural checks are done internally).
  * @param opts.nowMs base moment (default Date.now(); used for the neverMatch check).
  * @param opts.defaultTz default timezone (default systemTimeZone(); unused when the timeZone field is set).
- * @returns ok:true → normalized scheduling parameters + calendar condition objects; ok:false → error list (whole spec rejected).
+ * @returns ok:true -> normalized scheduling parameters + calendar condition objects; ok:false -> error list (whole spec rejected).
  */
 export function validateJob(
   spec: unknown,
@@ -49,7 +49,7 @@ export function validateJob(
     if (!TOP_FIELDS.has(k)) errors.push(`unknown top-level field: ${k}`)
   }
 
-  // ── Timezone first (naive ISO / DST gap checks / cron parsing all use the job's effective timezone) ──
+  // -- Timezone first (naive ISO / DST gap checks / cron parsing all use the job's effective timezone) --
   let tz = defaultTz
   if (s.timeZone !== undefined) {
     if (typeof s.timeZone !== 'string' || !isValidTimeZone(s.timeZone)) {
@@ -59,7 +59,7 @@ export function validateJob(
     }
   }
 
-  // ── Triggers (at least one) ──
+  // -- Triggers (at least one) --
   const calendars: InstanceType<typeof CalendarCondition>[] = []
   const seenCalValues = new Set<string>()
   // null = explicitly not using the calendar trigger (treated as absent; the missing-trigger check still applies).
@@ -105,7 +105,7 @@ export function validateJob(
     errors.push('missing trigger: at least one of onCalendar / onActiveSec / onStartupSec is required')
   }
 
-  // ── Booleans / run parameters (timezone already resolved before triggers) ──
+  // -- Booleans / run parameters (timezone already resolved before triggers) --
   if (s.enable !== undefined && typeof s.enable !== 'boolean') {
     errors.push('enable must be a boolean')
   }
@@ -113,7 +113,7 @@ export function validateJob(
     errors.push('persistent must be a boolean')
   }
   // deferReactivation: accepted as a boolean; on jobs without any onCalendar condition the
-  // value is ignored (monotonic re-arm never references defer — aligned with systemd:
+  // value is ignored (monotonic re-arm never references defer - aligned with systemd:
   // "effect only if a realtime timer has been specified").
   if (s.deferReactivation !== undefined && typeof s.deferReactivation !== 'boolean') {
     errors.push('deferReactivation must be a boolean')
@@ -128,7 +128,7 @@ export function validateJob(
     errors.push(`overlap invalid: ${JSON.stringify(s.overlap)} (allowed: skip/stop/allow)`)
   }
 
-  // ── run block (must exist; prompt required and non-empty) ──
+  // -- run block (must exist; prompt required and non-empty) --
   let run: Record<string, unknown> | null = null
   if (s.run === undefined) {
     errors.push('missing run block (prompt is required)')
@@ -143,7 +143,7 @@ export function validateJob(
       errors.push('run.prompt is required and must be non-empty (a whitespace-only prompt is rejected)')
     }
     // run.cwd / run.preset / run.model: undefined or null = unset (explicit null is accepted
-    // and means the same as omitting the field); any string — including the empty string —
+    // and means the same as omitting the field); any string - including the empty string -
     // is accepted (structural validation only; the effect is resolved at run time).
     for (const k of ['cwd', 'preset', 'model']) {
       const v = run[k]
@@ -170,7 +170,7 @@ export function validateJob(
 
   if (errors.length > 0) return { ok: false, errors }
 
-  // ── neverMatch flagging (accepted and flagged, not rejected) ──
+  // -- neverMatch flagging (accepted and flagged, not rejected) --
   const neverMatch: string[] = []
   for (const cal of calendars) {
     if (cal.isNeverMatch(nowMs)) neverMatch.push(cal.value)

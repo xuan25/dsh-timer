@@ -1,6 +1,6 @@
 // dsh-timer privilege checks: policy monotonicity, the run-root scope rule, the
 // approval-channel escalation, and the run.cwd caller-root rule. Pure logic with the
-// framework seams kept as minimal structural interfaces — no dsh-* imports, so the module
+// framework seams kept as minimal structural interfaces - no dsh-* imports, so the module
 // stays testable in the zero-framework selftest.
 //
 // Threat model: the tool handler runs with the plugin process's file authority (it writes
@@ -8,7 +8,7 @@
 // must gate what job policies it may create or act on, or a low-privilege session could
 // persistently install higher-privilege run sessions. The scope rule adds the second
 // axis: a job's run root is its control domain, and a session outside that domain must
-// not manage the job (rewrite, stop, or delete it) — not even at the same policy level —
+// not manage the job (rewrite, stop, or delete it) - not even at the same policy level -
 // or sibling scopes could interfere with each other's jobs, system-critical ones included.
 import { existsSync, realpathSync } from 'node:fs'
 import path from 'node:path'
@@ -54,7 +54,7 @@ export interface CallerContext {
   readonly policy: Policy | null
   /** The deployment default policy (the sandbox-policy service's defaultMode); null = no policy world. */
   readonly defaultMode: Policy | null
-  /** The caller session's absolute cwd (SessionHeader.cwd); null = unknown — no anchor for the run.cwd rule. */
+  /** The caller session's absolute cwd (SessionHeader.cwd); null = unknown - no anchor for the run.cwd rule. */
   readonly cwd: string | null
   /** The runtime agent face (the approval routing target); null = no routing target. */
   readonly agent: RuntimeAgentFace | null
@@ -121,9 +121,9 @@ export function inheritRunRoot(callerCwd: string | null): string | null {
 }
 
 /**
- * The job's effective run root: the spec's explicit run cwd, or — for a spec that leaves
- * it unset — null, so the root is undetermined and fails closed. The same derivation the runner uses for the run
- * session's cwd. The run root is the job's control scope under the scope rule — and,
+ * The job's effective run root: the spec's explicit run cwd, or - for a spec that leaves
+ * it unset - null, so the root is undetermined and fails closed. The same derivation the runner uses for the run
+ * session's cwd. The run root is the job's control scope under the scope rule - and,
  * because the runner creates the run session with this root as its session cwd, the very
  * property that lets a job's own run session manage itself; jobs created from a
  * different session carry a different workspace root and stay outside its scope.
@@ -137,13 +137,13 @@ export function runRootOfSpec(spec: unknown): string | null {
 /**
  * One privilege check for a verb the caller is about to perform.
  * - `verb` / `jobId`: naming for the messages.
- * - `jobPolicy`: the level the verb acts on — the resulting policy for add; the MAX of the
+ * - `jobPolicy`: the level the verb acts on - the resulting policy for add; the MAX of the
  *   existing job's level and the resulting level for update (a lower-level session may not
  *   touch a higher-level job at all, not even to demote or rewrite it); the job's existing
  *   level for enable / disable / run / cancel / delete.
  * - `runCwd`: the new spec's explicit run cwd (add / update only).
  * - `runRoot`: the job's effective run root for the management verbs (update / enable /
- *   disable / run / cancel / delete): its run cwd — the job's control scope under the
+ *   disable / run / cancel / delete): its run cwd - the job's control scope under the
  *   scope rule. null = the run root could not be determined (the spec omits run cwd, or
  *   it could not be read) and fails closed as outside every scope. Absent for add,
  *   which carries no scope axis.
@@ -163,8 +163,8 @@ export interface PrivilegeCheck {
  * construction: the runner creates the run session with the job's run root as its session
  * cwd, so every job manages itself freely; a job of a different workspace root stays out
  * of its scope.
- * Fail closed: a caller without a known cwd — or a job whose run root could not be
- * determined — cannot be verified in scope, and is treated as outside.
+ * Fail closed: a caller without a known cwd - or a job whose run root could not be
+ * determined - cannot be verified in scope, and is treated as outside.
  */
 type ScopeVerdict =
   | { kind: 'in' }
@@ -205,7 +205,7 @@ function scopeVerdict(caller: CallerContext, check: PrivilegeCheck): ScopeVerdic
  * update) must sit at or under the caller session's own cwd. Omitted or null cwd never
  * reaches this rule: at add time it is inherited from the creating session's workspace
  * (materialized into the job file before the check), and at update time it keeps the
- * job's existing run root — so the rule below only sees cwd values the caller actually
+ * job's existing run root - so the rule below only sees cwd values the caller actually
  * chose. An approved operation lifts the rule: the human saw the cwd in the approval
  * question.
  */
@@ -272,7 +272,7 @@ export async function checkCallerPrivilege(
 /**
  * The run.cwd caller-root rule: at or under the caller's own cwd, canonicalized on both
  * sides. A caller without a known cwd cannot anchor the rule, so an explicit run.cwd is
- * denied for it (only explicit values reach this rule — see the inheritance semantics in
+ * denied for it (only explicit values reach this rule - see the inheritance semantics in
  * the checkCallerPrivilege doc above).
  */
 function enforceRunCwd(caller: CallerContext, runCwd: string | null | undefined): void {
@@ -292,7 +292,7 @@ function enforceRunCwd(caller: CallerContext, runCwd: string | null | undefined)
  * Canonicalize a possibly-relative, possibly-symlinked path: resolve it lexically against
  * the process cwd (the same base the runner's mkdirSync uses for run cwds), then apply the
  * real path of the deepest existing prefix. The target run directory itself does not exist
- * yet (the runner creates it), so only its existing prefix is resolved — which still stops
+ * yet (the runner creates it), so only its existing prefix is resolved - which still stops
  * a symlink under the caller's root from pointing outside it.
  */
 export function canonicalize(p: string): string {

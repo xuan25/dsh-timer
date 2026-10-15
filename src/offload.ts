@@ -46,7 +46,7 @@ export const OFFLOAD_STORE_ROOT = 'sessions'
  * (`$DSH_HOME/sessions`), a SIBLING of the plugin home - run sessions are
  * owned by the framework store, only their archives move into the plugin
  * home. The plugin constructor is the single production call site of this
- * helper (the selftest pins it, see the O11 layout section).
+ * helper (the selftest pins it, see the layout section).
  */
 export function offloadLayout(resolveHome: (segment: string) => string): {
   base: string
@@ -578,8 +578,9 @@ export class OffloadSweeper {
     this.streak = increment > this.opts.cap ? this.streak + 1 : 0
     if (this.streak >= TREND_K) {
       report.trendAlert = true
-      // D22 line content: B_t + A_t + c + completed-line ratio + growth rate
-      // (A_t - c) per sweep + one discriminator sentence.
+      // Trend line content: the streak count, the balance, the per-sweep
+      // increment over the budget, the completed-line ratio, and one
+      // discriminator sentence.
       const growth = increment - this.opts.cap
       const advice =
         ratio < COMPACTION_RATIO

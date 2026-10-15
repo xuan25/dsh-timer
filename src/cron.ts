@@ -4,7 +4,7 @@
  *
  * Cron parsing is delegated to croner in mode '5-or-6-parts' (4/7-field patterns and
  * out-of-range values are rejected). neverMatch detection = croner exhaustive search
- * (nextRun() === null after its exhaustive Gregorian sweep — this mode has no year field,
+ * (nextRun() === null after its exhaustive Gregorian sweep - this mode has no year field,
  * so the sweep is capped at AD 3000 by croner 10.0.1).
  */
 import { Cron, CronPattern } from 'croner'
@@ -26,16 +26,16 @@ export type CalendarParsed =
  * re-resolution; a DST gap is an error).
  * @param value element of the onCalendar array.
  * @param tz job timezone (IANA name).
- * @returns parse result; a naive ISO inside a DST gap → { ok:false, error }.
+ * @returns parse result; a naive ISO inside a DST gap -> { ok:false, error }.
  */
 export function parseCalendarValue(value: string, tz: string): CalendarParsed {
   const z = ISO_ZONED_RE.exec(value)
   if (z) {
     const parsedUtc = Date.UTC(+z[1], +z[2] - 1, +z[3], +z[4], +z[5], +z[6])
-    // Offset shaped as ±HH:MM → hours = first 2 digits, minutes = last 2 digits (sign applies to the whole offset)
+    // Offset shaped as +/-HH:MM -> hours = first 2 digits, minutes = last 2 digits (sign applies to the whole offset)
     const off = z[7] === 'Z' ? 0 : ((+(z[7].slice(1, 3)) * 3_600_000) + (+(z[7].slice(4, 6)) * 60_000)) * (z[7][0] === '-' ? -1 : 1)
     // A zoned ISO carries its own offset: the absolute instant is intrinsic and never
-    // depends on any timezone → no wall components are stored.
+    // depends on any timezone -> no wall components are stored.
     return { ok: true, kind: 'iso', instantMs: parsedUtc - off, wallParts: null }
   }
   const n = ISO_NAIVE_RE.exec(value)
@@ -76,7 +76,7 @@ export class CalendarCondition {
    * change re-resolves a naive-ISO condition under the new zone. */
   instantMs: number | null = null
   /** Wall-clock components of a naive-ISO value (non-null only for naive ISO); null for cron
-   * and zoned-ISO conditions (a zoned offset is intrinsic → unaffected by system timezone
+   * and zoned-ISO conditions (a zoned offset is intrinsic -> unaffected by system timezone
    * changes). Stored so recomputeTzChange can re-resolve the wall time under the new zone. */
   wallParts: WallParts | null = null
   /** Cached Cron instance. */
@@ -124,7 +124,7 @@ export class CalendarCondition {
 
   /**
    * Next match strictly after fromMs.
-   * cron: croner finds no solution after exhaustive search → null (= neverMatch);
+   * cron: croner finds no solution after exhaustive search -> null (= neverMatch);
    * ISO: the instant when it is >= fromMs, otherwise null.
    * @param fromMs base moment (ms).
    * @returns next match moment (ms); null when there is no future match.

@@ -47,7 +47,7 @@
       "type": "string",
       "enum": ["skip", "stop", "allow"],
       "default": "skip",
-      "description": "What to do when a trigger fires while a run is in progress. skip consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points), stop cancels the in-progress run first and then starts, and allow starts a parallel run."
+      "description": "What to do when a trigger fires while a run is in progress. skip consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends - a run longer than the interval swallows grid points), stop cancels the in-progress run first and then starts, and allow starts a parallel run."
     },
     "run": {
       "type": "object",

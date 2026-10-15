@@ -39,7 +39,7 @@ export interface ParseSpanOptions {
  * missing unit means seconds ("30").
  * Units are case-sensitive: m=minutes, M=months.
  * Accepted units: us/usec ms/msec s/sec[ond]s m/min[ute]s h/hour[s] d/day[s] w/week[s] M/month[s] y/year[s].
- * @param value the value to parse (non-string → null).
+ * @param value the value to parse (non-string -> null).
  * @param opts positive=true requires a total duration > 0.
  * @returns duration in ms; null when unparseable, negative, or (positive && 0).
  */
@@ -106,7 +106,7 @@ export function parseRuntimeMax(value: unknown): number | null | undefined {
 
 /**
  * Interpret an onActiveSec / onStartupSec value: unset (undefined or null = explicitly not
- * using that trigger) → null; non-string or not a positive span (including "0") → null.
+ * using that trigger) -> null; non-string or not a positive span (including "0") -> null.
  * Sibling of {@link parseRuntimeMax}: both normalize raw *Sec field values onto
  * {@link parseSpan}; the value space differs (trigger fields reject "0"/"infinity",
  * runtimeMaxSec maps them to "no limit").
@@ -147,7 +147,7 @@ export function packageRoot(): string {
 }
 
 /**
- * Resolve the install root (in a dsh profile install, the profile directory — the
+ * Resolve the install root (in a dsh profile install, the profile directory - the
  * directory that contains the plugin's node_modules tree): walk up from the package
  * directory until a directory named 'node_modules' is found; its parent is the install
  * root. Bounded at 32 levels as a cycle guard.
@@ -172,7 +172,7 @@ export function getProfileDir(pkgDir: string): string | null {
  * as `dsh-profile-<name>` when it creates the profile (dsh-app-boot). A directory counts
  * as a candidate only when its package.json parses, names a `dsh-profile-*` profile, and
  * the name's suffix equals the directory name (a directory renamed without updating its
- * package.json no longer matches — the name contract is broken, so the caller must
+ * package.json no longer matches - the name contract is broken, so the caller must
  * configure jobsDir explicitly).
  * The framework does not publish which profile a running process serves (no env, no
  * service); this convention is the only on-disk encoding of the profile name, which is
@@ -198,7 +198,7 @@ export function discoverProfileDir(dshHomePath: (...segments: string[]) => strin
     try {
       name = (JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown }).name
     } catch {
-      continue // missing or unparseable package.json → not a framework-minted profile
+      continue // missing or unparseable package.json -> not a framework-minted profile
     }
     if (typeof name !== 'string' || !name.startsWith('dsh-profile-')) continue
     if (name.slice('dsh-profile-'.length) !== entry) continue
@@ -247,18 +247,18 @@ export function ensureJobsDir(jobsDir: string): void {
  *
  * Candidate chain, in order:
  * 1. explicit: plugin config jobsDir, then env DSH_TIMER_JOBS_DIR. An explicit candidate
- *    that is unavailable → hard failure (a directory the operator explicitly designated
+ *    that is unavailable -> hard failure (a directory the operator explicitly designated
  *    must fail loudly, never silently switch directories);
  * 2. default: <profileDir>/timers, where profileDir comes from the install-root walk-up
  *    ({@link getProfileDir}) or, when the walk-up finds nothing (e.g. a symlinked install
  *    outside the install tree), from the framework-convention discovery
  *    ({@link discoverProfileDir} via the dshHomePath service the framework provides at
- *    boot). A default candidate that is unavailable → warn and start degraded (the path
+ *    boot). A default candidate that is unavailable -> warn and start degraded (the path
  *    is kept; until it becomes available again and a reload happens, job files cannot be
  *    read and state files cannot be written);
  * 3. no candidates at all (no explicit value, no install root, and the discovery absent
- *    or ambiguous: zero or multiple framework-minted profiles under the harness home) →
- *    throw (an explicit jobsDir is required — a multi-profile harness home cannot be
+ *    or ambiguous: zero or multiple framework-minted profiles under the harness home) ->
+ *    throw (an explicit jobsDir is required - a multi-profile harness home cannot be
  *    auto-detected).
  *
  * @param pluginConfig plugin configuration ({ jobsDir? }).
@@ -278,7 +278,7 @@ export function resolveJobsDir(pluginConfig: { jobsDir?: string }, logger: { inf
       return c.value
     } catch (err) {
       const msg = errMsg(err)
-      throw new Error(`${PLUGIN_NAME} cannot initialize jobsDir (${c.source} = ${c.value}): ${msg} — check the directory and permissions`)
+      throw new Error(`${PLUGIN_NAME} cannot initialize jobsDir (${c.source} = ${c.value}): ${msg} - check the directory and permissions`)
     }
   }
   let profileDir = getProfileDir(packageRoot())
@@ -294,15 +294,15 @@ export function resolveJobsDir(pluginConfig: { jobsDir?: string }, logger: { inf
       logger.info(`jobsDir = ${value} (default <profileDir>/timers via ${source})`)
       return value
     } catch (err) {
-      // The default candidate is unavailable → degrade instead of failing startup: keep the
+      // The default candidate is unavailable -> degrade instead of failing startup: keep the
       // path; until it becomes available again (and a reload happens), job files cannot be
       // read and state files cannot be written.
       const msg = errMsg(err)
-      logger.warn(`default jobsDir unavailable (<profileDir>/timers via ${source}): ${msg} — starting degraded: no job loading or state persistence until the directory is fixed and reloaded`)
+      logger.warn(`default jobsDir unavailable (<profileDir>/timers via ${source}): ${msg} - starting degraded: no job loading or state persistence until the directory is fixed and reloaded`)
       return value
     }
   }
-  // All candidates exhausted → fail closed; the detail below names the missing channel.
+  // All candidates exhausted -> fail closed; the detail below names the missing channel.
   const detail = dshHomePath
     ? 'no install root was found and harness-home profile discovery is ambiguous (zero or multiple dsh-profile-* profiles under the harness home)'
     : 'no install root was found and the host does not provide the dshHomePath service (profile discovery unavailable)'

@@ -20,7 +20,7 @@ export const VERBS = ['reload', 'status', 'run', 'enable', 'disable', 'add', 'up
  * header holds the session cwd). Both framework services are read through cordis'
  * non-strict `ctx.get` accessor (the context proxy requires a declared inject for
  * property access inside a runtime, and a host may compose either service or neither
- * — `ctx.get` returns undefined then and the check degrades or fails closed instead
+ * - `ctx.get` returns undefined then and the check degrades or fails closed instead
  * of throwing).
  */
 function deriveCallerContext(ctx: Context, exec: ToolRunContext | undefined): CallerContext {
@@ -48,7 +48,7 @@ function deriveCallerContext(ctx: Context, exec: ToolRunContext | undefined): Ca
 }
 
 /**
- * Register the timer tool (9 verbs → TimerScheduler methods).
+ * Register the timer tool (9 verbs -> TimerScheduler methods).
  * @param ctx cordis Context (the host must have loaded the dsh-tools service).
  * @param scheduler the plugin-side scheduler instance (a thrown error = verb failure; the framework relays error.message).
  * @returns framework effect disposer (unregisters the tool when the fiber is unloaded).
@@ -68,7 +68,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
         'update replaces the spec of an existing job in place (update-only: it fails if the job does not exist; add creates it); the job state file is preserved, so run history and scheduling anchors survive and a changed trigger reschedules from the existing anchor; in-progress runs keep executing the spec they started with. ' +
         'delete removes the job config and its state file. ' +
         'cancel cancels all in-progress runs of a job. ' +
-        'Privilege rules: two axes gate the job-acting verbs (update, enable, disable, run, cancel, delete) — the level axis (the job\'s file-access policy above this session\'s own level) and the scope axis (the job\'s effective run root outside this session\'s workspace root; a job\'s own run session manages itself freely) — either routing through the approval channel for a one-shot human decision; a full-access session is exempt from both axes; add is exempt from the scope axis and a non-full-access session may set a new job\'s explicit run cwd only at or under its own session cwd (denied locally, no approval); an approved operation lifts the cwd rule; the run.cwd inheritance rules are in the cwd field description. ' +
+        'Privilege rules: two axes gate the job-acting verbs (update, enable, disable, run, cancel, delete) - the level axis (the job\'s file-access policy above this session\'s own level) and the scope axis (the job\'s effective run root outside this session\'s workspace root; a job\'s own run session manages itself freely) - either routing through the approval channel for a one-shot human decision; a full-access session is exempt from both axes; add is exempt from the scope axis and a non-full-access session may set a new job\'s explicit run cwd only at or under its own session cwd (denied locally, no approval); an approved operation lifts the cwd rule; the run.cwd inheritance rules are in the cwd field description. ' +
         'Job spec fields: onCalendar, onActiveSec, onStartupSec, timeZone, persistent, deferReactivation, runtimeMaxSec, overlap, enable, run.',
       parameters: {
         verb: { type: 'string', required: true, enum: VERBS, description: 'The verb to execute.' },
@@ -130,7 +130,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
               type: 'object',
               additionalProperties: true,
               description:
-                'Per-run settings: prompt (required) plus the optional fields cwd, preset, model, and policy — see their field descriptions for the exact semantics.',
+                'Per-run settings: prompt (required) plus the optional fields cwd, preset, model, and policy - see their field descriptions for the exact semantics.',
               properties: {
                 prompt: {
                   type: 'string',

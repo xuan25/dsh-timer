@@ -1,8 +1,8 @@
 // dsh-timer run executor: each run creates a fresh independent session (full inheritance
 // from the run session), fires the initial followup, and settles via whenIdle. The create
-// call is bounded by CREATE_TIMEOUT_MS (timeout → create_failed + orphan cancel/dispose),
+// call is bounded by CREATE_TIMEOUT_MS (timeout -> create_failed + orphan cancel/dispose),
 // so a stuck create always settles.
-// Note: agent.followup returns void (not a promise; verified against dsh-agent 0.1.5-rc.3) —
+// Note: agent.followup returns void (not a promise; verified against dsh-agent 0.1.5-rc.3) -
 // turn_error can only be detected by scanning the session events for turn/end; the edge case
 // of no turn/end and no pendingCause falls back to finished (a warn log is emitted here).
 // Event reading uses session.snapshotEvents() (the dsh-session public event-log API): the
@@ -42,9 +42,9 @@ export function buildRunPrompt(taskPrompt: string): string {
 /**
  * Minimal session event shape (only the fields this module needs; the full SessionEvent union is scanned as unknown).
  * dsh-session nests event payloads under `data`: append(type, data) logs { type, seq, time,
- * data }, and the agent-loop payloads are turn/end → data:{ turn, reason } and
- * assistant/message → data:{ turn, step, message } (verified against dsh-session 0.1.5-rc.3)
- * — the settlement read sites below therefore read event.data.reason / event.data.message,
+ * data }, and the agent-loop payloads are turn/end -> data:{ turn, reason } and
+ * assistant/message -> data:{ turn, step, message } (verified against dsh-session 0.1.5-rc.3)
+ * - the settlement read sites below therefore read event.data.reason / event.data.message,
  * never event.reason / event.message.
  */
 interface EventLike {
@@ -84,7 +84,7 @@ function lastAssistantText(events: readonly unknown[], limit: number): string {
   return ''
 }
 
-/** Normalize a turn/end reason: strings are used as-is; objects take .reason / .kind; anything else → 'error'. */
+/** Normalize a turn/end reason: strings are used as-is; objects take .reason / .kind; anything else -> 'error'. */
 function reasonKind(reason: unknown): string {
   if (typeof reason === 'string') return reason
   if (reason && typeof reason === 'object') {
@@ -95,7 +95,7 @@ function reasonKind(reason: unknown): string {
   return 'error'
 }
 
-/** turn/end event → settlement mapping (run settlement matrix). */
+/** turn/end event -> settlement mapping (run settlement matrix). */
 function settleFromTurnEnd(
   endEvent: EventLike | null,
   run: RunRecord,
@@ -109,7 +109,7 @@ function settleFromTurnEnd(
 }
 
 /**
- * Settings-document namespace holding the deployment's default model selection — the
+ * Settings-document namespace holding the deployment's default model selection - the
  * canonical store the framework's agent-default-model service is built on. The literal
  * mirrors the constant the owning package exports; the package is spelled out locally
  * because it is not a dependency of this plugin.
@@ -132,17 +132,17 @@ function normalizeDefaultSelection(value: unknown): DefaultModelSelection | unde
 }
 
 /**
- * Read the deployment's default model selection, trying three SOFT sources in order —
+ * Read the deployment's default model selection, trying three SOFT sources in order -
  * none of them is a required inject, so a host providing none of them simply has no
  * default route (no error is raised by this read):
- *  1. the framework's agent-default-model service, when the host provides it — read via
+ *  1. the framework's agent-default-model service, when the host provides it - read via
  *     `ctx.get` (cordis' non-strict service read: it returns undefined for a service the
  *     host does not provide, unlike a direct property access which throws
  *     `cannot get property ... without inject`);
  *  2. the settings service's section under the default-model namespace, when the host
  *     provides the settings document but not the service;
  *  3. the raw settings document file at the harness home (`settings.yaml`), the same
- *     file both sources above are built on — read at run creation, so edits to the file
+ *     file both sources above are built on - read at run creation, so edits to the file
  *     are picked up by the next run.
  * Any source failure (missing file, unparseable YAML, malformed section) degrades to
  * "no source": a route-less run then settles with the framework's own no-provider/model
@@ -170,7 +170,7 @@ export async function readDefaultModelSelection(ctx: Context): Promise<DefaultMo
 /**
  * The host's agent preset service (dsh-agent-presets): the agent-plane composition source
  * (persona / instructions / the full tool roster). Accessed through cordis' non-strict
- * `ctx.get` exactly like the default-model sources above — a host without the service
+ * `ctx.get` exactly like the default-model sources above - a host without the service
  * (or an out-of-product host) simply gets the baseline composition for preset-less runs.
  * Structural surface only: dsh-agent-presets is not a dependency of this plugin.
  */
@@ -199,16 +199,16 @@ function getPresetsService(ctx: Context): PresetService | undefined {
  * Model route for the run session. The framework requires an explicit provider/model
  * pair for headless sessions: a turn whose route is incomplete rejects at the first
  * request and the run settles failed/turn_error. Resolution order:
- *  1. `run.model` containing "/" → the prefix before the first slash is the provider,
+ *  1. `run.model` containing "/" -> the prefix before the first slash is the provider,
  *     the remainder the model id (a model id that itself contains a slash must include
- *     the provider prefix). This branch never touches any host service — an explicit
+ *     the provider prefix). This branch never touches any host service - an explicit
  *     route works on every host, even one providing no default-model source at all.
- *  2. `run.model` without "/" → that model id on the deployment's default provider,
+ *  2. `run.model` without "/" -> that model id on the deployment's default provider,
  *     from readDefaultModelSelection.
- *  3. no `run.model` → the deployment's default selection (provider + model) from
+ *  3. no `run.model` -> the deployment's default selection (provider + model) from
  *     readDefaultModelSelection, the same route the framework's own headless runner
  *     applies.
- *  4. neither → no route is passed; the first turn fails and the turn/end error message
+ *  4. neither -> no route is passed; the first turn fails and the turn/end error message
  *     is surfaced in the run record (see turnErrorMessage).
  * The reasoning effort follows the selected provider/model's own default (the headless
  * convention).
@@ -285,14 +285,14 @@ export type StartRunResult = { ok: true } | { ok: false; error: string }
 /**
  * Start one run. The run is registered in state before the session is created (lastActivation =
  * run start moment, persisted immediately, so a create failure cannot open a double-fire window
- * for onActiveSec); create failure → failed/create_failed (the fire bookkeeping is the
- * scheduler's — bookkeepCreateFailed treats the fire as happened, so no retry storm).
+ * for onActiveSec); create failure -> failed/create_failed (the fire bookkeeping is the
+ * scheduler's - bookkeepCreateFailed treats the fire as happened, so no retry storm).
  * Run-cwd creation failure fails the run immediately the same way (no session is created);
  * agent preset resolution is part of the same create-failure surface (see the create-site
  * comment).
- * The create call is bounded by CREATE_TIMEOUT_MS (see the constant): a timeout — and a
+ * The create call is bounded by CREATE_TIMEOUT_MS (see the constant): a timeout - and a
  * create that REJECTS (missing agent factory, or the factory's own setup failure, caught
- * in the race's onRejected branch) — settles the run identically through failCreate;
+ * in the race's onRejected branch) - settles the run identically through failCreate;
  * startRun itself never rejects for a create failure, every failure mode returning
  * { ok: false }.
  * A stop requested while the session is being created (handle not yet assigned, the tick's
@@ -363,7 +363,7 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd, 
   // service via the create call's setup hook. The setup hook awaits mount and returns
   // void: the agent loop awaits the setup result and calls ?.commit() on it
   // (AgentSetupCommit | void), while mount returns its standing-mount record, not a
-  // commit — leaking that return value crashes create with
+  // commit - leaking that return value crashes create with
   // "(intermediate value)?.commit is not a function".
   // A job that NAMES a preset is declarative
   // config: an unresolvable or broken preset (or an absent service) fails the run
@@ -402,7 +402,7 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd, 
   // SessionId is a type-level brand (Branded<'SessionId'>); at runtime it is just a string.
   // ctx.agents.create is async: every create failure
   // (missing factory, setup failure) surfaces as a rejection of the returned promise and can
-  // never throw synchronously — so no try/catch wraps the call. The rejection is settled in
+  // never throw synchronously - so no try/catch wraps the call. The rejection is settled in
   // the race's onRejected branch below (failCreate, exactly like a timeout).
   const createPromise = ctx.agents.create({
     sessionId: run.sessionId as SessionId,
@@ -457,7 +457,7 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd, 
   disarmDeadline()
   if ('failed' in createResult) {
     // A rejected create (missing agent factory, or the factory's own setup failure) settles
-    // the run exactly like a timeout: failed/create_failed. No session is left behind — a
+    // the run exactly like a timeout: failed/create_failed. No session is left behind - a
     // rejected create has no agent to dispose (the deadline branch's orphan protection only
     // covers a create that RESOLVES after the deadline).
     return failCreate(`agent create failed: ${createResult.failed}`)
