@@ -21,7 +21,7 @@ export const TOP_FIELDS = new Set([
   'overlap',
   'run',
 ])
-export const RUN_FIELDS = new Set(['prompt', 'cwd', 'preset', 'model', 'policy'])
+export const RUN_FIELDS = new Set(['prompt', 'cwd', 'preset', 'model', 'policy', 'sessionRetention'])
 export const OVERLAPS = new Set(['skip', 'stop', 'allow'])
 export const POLICIES = new Set(['read-only', 'workspace-write', 'danger-full-access'])
 
@@ -153,6 +153,18 @@ export function validateJob(
     }
     if (run.policy !== undefined && run.policy !== null && !POLICIES.has(String(run.policy))) {
       errors.push(`run.policy invalid: ${JSON.stringify(run.policy)} (allowed: read-only/workspace-write/danger-full-access)`)
+    }
+    // run.sessionRetention: undefined or null = unset (window 0 = retain, no offload); a
+    // string or a number (milliseconds) is accepted structurally. The offload parser judges
+    // the syntax at sweep time: an invalid value warns and resolves to 0, never rejecting
+    // the job (the schema checks the type only).
+    if (
+      run.sessionRetention !== undefined &&
+      run.sessionRetention !== null &&
+      typeof run.sessionRetention !== 'string' &&
+      typeof run.sessionRetention !== 'number'
+    ) {
+      errors.push(`run.sessionRetention must be a number (milliseconds), a duration string, or null`)
     }
   }
 

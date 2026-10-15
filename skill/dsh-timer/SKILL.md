@@ -1,6 +1,6 @@
 ---
 name: dsh-timer
-description: "dsh-timer scheduled task plugin usage guide: 9 verbs, task file fields, examples, semantics highlights, and a troubleshooting decision tree."
+description: "dsh-timer scheduled task plugin usage guide: 9 verbs, task file fields, examples, semantics highlights, the session offload knob (run.sessionRetention), and a troubleshooting decision tree."
 whenToUse: when you need to create / inspect / enable-disable / manually trigger / delete scheduled tasks (dsh-timer timer tool)
 ---
 
@@ -42,7 +42,8 @@ The table below is a quick reference; the complete field reference (full field d
     "cwd": "<session-cwd>/x",   // run session working dir. Omitted/null on add: inherited from the creating session's workspace itself (<session-cwd>); on update: keeps the job's existing value. A creating session without a cwd must set it explicitly, or the add is refused
     "preset": "",               // agent preset of the run session; naming a preset that is unresolvable or broken fails the run as create_failed; null = same as omitting (the deployment's default preset)
     "model": "provider/model",  // model route: "provider/model", or a bare model id (rides the deployment's default provider); omitted or null = the deployment's default model selection, when a source provides it
-    "policy": "workspace-write" // read-only|workspace-write|danger-full-access; null = deployment default
+    "policy": "workspace-write", // read-only|workspace-write|danger-full-access; null = deployment default
+    "sessionRetention": "24h"   // session offload window for the run session: non-negative integer ms, or 1-2 digits+unit segments (d/h/m/s/ms) in descending order (e.g. 24h, 4h30m, 90s, 5000ms; a bare numeric string is invalid); 0/null/omitted = retain in the store; an invalid value warns and counts as 0 - see section 7
   }
 }
 ```
@@ -102,4 +103,17 @@ When status output looks wrong, check in this order:
 11. `add` reports `already exists` → a job file with that id is present: to replace the job, `delete` it first (the delete also removes its state file — next-fire times and one-shot marks are lost) or `update` it in place instead (its state file survives), or use a different id.
 12. `update` reports `not found` → no job file with that id: `add` creates it. A job sitting in [rejected] can be repaired with `update` (its file exists; a valid spec promotes it out of rejected) — `enable` on a rejected job stays blocked until the spec is valid.
 
-Evidence locations: the state file `<jobsDir>/state/<id>.json` (run records carry runId/sessionId — use the sessionId to look up the full run session record); the plugin log (prefix `dsh-timer`).
+Evidence locations: the state file `<jobsDir>/state/<id>.json` (run records carry runId/sessionId - use the sessionId to look up the full run session record); the plugin log (prefix `dsh-timer`).
+
+## 7. Session offload (run.sessionRetention)
+
+Job runs leave on-disk session logs in the framework session store. The per-minute offload sweep (one instance per plugin process, independent of the scheduler tick) bounds that store under the jobs' `run.sessionRetention` windows:
+
+- Write gate: a dispatched run session is recorded in the retention log (one line: session id, dispatch time, job id, run cwd) only when the job's effective retention window is non-zero at dispatch time (the job's explicit `run.sessionRetention`, or the `TIMER_SESSION_RETENTION` unit default when the job sets none); a zero/absent/invalid window (invalid values warn) and a run that fails before its cwd is determined are never recorded.
+- Sweep: every minute, for each recorded session whose window has elapsed (measured from dispatch time) or whose job is gone from the job directory (a vanished unit is offloaded immediately regardless of age), and which is not live (not in-flight and not in the live session registry), the session directory is moved into the archive (`$DSH_HOME/dsh-timer/archived-sessions/`); the session store itself is never deleted, only moved. A session still running is kept and retried next round; if it goes live only after the move, it is moved back.
+- Retention log: `$DSH_HOME/dsh-timer/retention-log.jsonl` (append-only lines; a ratio-triggered compaction rewrites it atomically).
+- Unit default window: `TIMER_SESSION_RETENTION` (env, read once at boot; a duration string like `24h` - a bare numeric string is invalid; absent = no default, invalid warns and falls back to 0) sets the default retention window for every job without an explicit `run.sessionRetention` (absent or null); an explicit job value always takes precedence over it.
+- Budget: `TIMER_OFFLOAD_BATCH` (env, default 50; an invalid value warns and falls back to 50) bounds the sessions one sweep may process. When consecutive sweeps see new log lines arriving faster than that budget, the sweep logs a trend warning (a visible signal to raise the knob or lower the retention windows; it takes no action on its own).
+- Failure semantics: an unreachable persistence service, a missing store root, or an archive on a different mount disables the sweep for that round (a visible warning; log lines are never lost); a failed individual move keeps the entry for the next round.
+
+If you are creating a job whose runs are frequent or chatty and the deployment should not accumulate run session logs, set `run.sessionRetention` to the retention window the operator wants (e.g. `"24h"`); the window is hot-updatable through `update` (the live rescan) and applies from the next sweep round, to newly dispatched sessions and to sessions already recorded in the retention log alike. If you are a run session and your job's window is set, your session directory will be moved to the archive after the window elapses; nothing else changes for you.

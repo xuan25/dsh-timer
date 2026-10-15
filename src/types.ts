@@ -32,6 +32,12 @@ export interface RunSpec {
   model?: string | null
   /** Per-session file-policy override; absent or `null` = deployment default. */
   policy?: Policy | null
+  /** Retention window for the run session after settlement (the offload plane): a non-negative
+   * millisecond number or a duration string (one or two "digits+unit" segments, units d/h/m/s/ms,
+   * descending: 24h, 4h30m, 90s, 5000ms). Absent or `null` = 0 (retain forever, no automatic
+   * offload). The syntax is judged by the offload parser at sweep time: an invalid value warns
+   * and resolves to 0, never rejecting the job (the schema checks the type only). */
+  sessionRetention?: number | string | null
 }
 
 /** Job spec (validated shape of the job file JSON; the raw unvalidated input type is `unknown`). */
@@ -157,11 +163,36 @@ export interface RescanSummary {
   rejected: number
 }
 
+/**
+ * Offload (retention plane) hooks the scheduler invokes on the run lifecycle. The plugin
+ * wires these to the OffloadSweeper. All three are optional (absent = offload inactive):
+ * the scheduler treats the hooks as fire-and-forget observability — a hook throwing must not
+ * disturb run scheduling (the plugin wraps them defensively).
+ */
+export interface SchedulerOffloadHooks {
+  /** The run session starts (registered before the agent create): mark it in-flight. */
+  onRunStarted: (jobId: string, sessionId: string) => void
+  /** The run session is dispatched (cwd known, agent create imminent): the retention line
+   * write point (the component applies its write gate and appends when the window is on). */
+  onDispatch: (jobId: string, sessionId: string, cwd: string) => void
+  /** The run settled (any outcome, including create_failed): clear the in-flight mark. */
+  onRunSettled: (jobId: string, sessionId: string) => void
+}
+
 /** TimerScheduler constructor options (injected during plugin apply). */
 export interface SchedulerOptions {
   ctx: Context
   logger: Logger
   jobsDir: string
+  /** Offload (retention plane) hooks (see {@link SchedulerOffloadHooks}); absent = offload inactive. */
+  offload?: SchedulerOffloadHooks
+  /**
+   * Unit-default retention window in ms (the TIMER_SESSION_RETENTION env, parsed once at
+   * construction, default 0): the window applied to every job whose run.sessionRetention is
+   * unset (absent or null). An explicit job value (valid or invalid) always takes
+   * precedence over the default.
+   */
+  defaultRetentionMs?: number
 }
 
 /** cordis Logger facade (return type of ctx.logger()). */

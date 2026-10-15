@@ -75,6 +75,10 @@
           "type": ["string", "null"],
           "enum": ["read-only", "workspace-write", "danger-full-access", null],
           "description": "File access policy of the run session: read-only, workspace-write, or danger-full-access. Omit the field or set it to null to use the deployment default."
+        },
+        "sessionRetention": {
+          "type": ["number", "string", "null"],
+          "description": "Retention window of the run session (session offload): a non-negative integer number of milliseconds, or a duration string of one or two digits+unit segments (units d/h/m/s/ms) in descending order (e.g. 24h, 4h30m, 90s, 5000ms; a bare numeric string is invalid). A valid non-zero window means: once a settled run session has outlived the window (measured from dispatch time), the per-minute offload sweep moves it from the framework session store into the plugin's archive ($DSH_HOME/dsh-timer/archived-sessions/). 0, null, or omission keeps the run session in the store; an invalid value warns and is treated as 0."
         }
       },
       "description": "Execution block of the job. Each run creates a fresh agent session that fully inherits the profile environment."
@@ -128,6 +132,10 @@
       "onCalendar": ["0 8 * * *"],
       "enable": false,
       "run": { "prompt": "Morning digest (stored disabled until it is enabled again)" }
+    },
+    {
+      "onActiveSec": "15min",
+      "run": { "prompt": "Check the CI dashboard and summarize", "sessionRetention": "24h" }
     }
   ]
 }

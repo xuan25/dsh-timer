@@ -1685,6 +1685,1274 @@ function naiveIsoCond(value, tz, consumed = false) {
     rmSync(base, { recursive: true, force: true })
   }
 }
+// ── session offload: the retention window parser, the retention log, the
+//    sweep (round health, window semantics, the source/destination existence
+//    table, the liveness gate and its rollback, the budget, compaction, the
+//    trend alert) and the run-lifecycle write gate plus the unit-window view
+//    (O1-O11)
+// ---------------------------------------------------------------------------
+{
+  const offload = await import(path.join(PKG, 'lib/offload.js'))
+  const { OffloadSweeper, OFFLOAD_ARCHIVE_DIR, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE, OFFLOAD_STORE_ROOT, readRetentionLog, appendRetentionEntry, rewriteRetentionLog, COMPACTION_RATIO } = offload
+  const { parseWindowMs, parseOffloadBatch, parseUnitDefaultWindowMs, DEFAULT_OFFLOAD_BATCH } = await import(path.join(PKG, 'lib/retention.js'))
+
+  // A fake sessionPersistence service: locate() mirrors the framework jsonl
+  // layout (the session dir is the dirname of the log path; a cwd-less
+  // session lives under the _no-cwd project dir). Run sessions always carry
+  // a cwd (the line is written after the runner's cwd check), so the
+  // _no-cwd branch is exercised only by directly seeded log lines.
+  function makeSpService(storeRoot) {
+    return {
+      locate: ({ id, cwd }) => ({
+        kind: 'jsonl',
+        path: path.join(storeRoot, cwd === undefined ? '_no-cwd' : path.basename(cwd), id, 'session.v4.jsonl.zstd'),
+      }),
+    }
+  }
+
+  // A fake live-session registry (the ctx.get('sessions') face; `known` is a
+  // mutable Set so a case can make a session live between two reads).
+  function makeRegistry(known) {
+    const set = known === undefined ? new Set() : known instanceof Set ? known : new Set(known)
+    return { known: set, get: (id) => (set.has(id) ? { id } : undefined) }
+  }
+
+  // A capturing ctx: ctx.get routes to the given services (soft read),
+  // the logger records warn/info/error lines.
+  function fakeCtx(services = {}) {
+    const state = { warns: [], infos: [], errors: [] }
+    const mkLog = () => ({
+      warn: (m) => state.warns.push(m),
+      error: (m) => state.errors.push(m),
+      info: (m) => state.infos.push(m),
+      debug: () => {},
+    })
+    const ctx = {
+      get: (name) => (services[name] !== undefined ? services[name] : undefined),
+      logger: () => mkLog(),
+    }
+    return { ctx, state }
+  }
+
+  // Build an OffloadSweeper rooted at a temp harness home (`home` is the
+  // harness home: the plugin home and the session store root sit under it).
+  // `units` is the live jobId -> window-ms map the sweep re-derives each
+  // round (0 = retain; an absent id = a vanished unit).
+  function makeSweeper(home, { storeRoot, units = new Map(), inflight = new Set(), cap = DEFAULT_OFFLOAD_BATCH, services = {}, now, devOf, move } = {}) {
+    const root = storeRoot ?? path.join(home, OFFLOAD_STORE_ROOT)
+    const pluginHome = path.join(home, OFFLOAD_HOME_BASE)
+    const { ctx, state } = fakeCtx(services)
+    const sweeper = new OffloadSweeper({
+      ctx,
+      logger: ctx.logger(),
+      home: {
+        base: pluginHome,
+        archive: path.join(pluginHome, OFFLOAD_ARCHIVE_DIR),
+        log: path.join(pluginHome, OFFLOAD_LOG_FILE),
+        storeRoot: root,
+      },
+      units: () => units,
+      inflight,
+      cap,
+      ...(now !== undefined ? { now } : {}),
+      ...(devOf !== undefined ? { devOf } : {}),
+      ...(move !== undefined ? { move } : {}),
+    })
+    return { sweeper, state, storeRoot: root }
+  }
+
+  // Create a source session dir (the store side) the way the framework
+  // would, and return its path.
+  function makeSessionDir(storeRoot, id, cwd) {
+    const dir = path.join(storeRoot, cwd === undefined ? '_no-cwd' : path.basename(cwd), id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'session.v4.jsonl.zstd'), 'log')
+    return dir
+  }
+
+  const T0 = 1_000_000
+  // The retention log stores the dispatch time as an ISO8601 string
+  // (the frozen line format); the fixtures wrap the numeric test clocks through this.
+  const iso = (ms) => new Date(ms).toISOString()
+  const W = 60_000 // the job retention window used across the sweep cases
+  const CWD = '/ws/a' // a fake workspace; the fake persistence service keys on its basename
+  const mapJob = (ms = W) => new Map([['job', ms]])
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const waitFor = async (pred, timeoutMs = 2000) => {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const v = await pred()
+      if (v) return v
+      if (Date.now() >= deadline) return false
+      await sleep(20)
+    }
+  }
+
+  // One round of fixtures: setup builds the home (store dir, log lines,
+  // session dirs) and returns the sweeper handles; the asserts run against
+  // the sweep report; the temp home is removed afterwards.
+  async function runCase(setup, fn) {
+    const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+    try {
+      const ctx = {
+        home,
+        storeRoot: path.join(home, OFFLOAD_STORE_ROOT),
+        logPath: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE),
+        archiveDir: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR),
+      }
+      const handles = await setup(ctx)
+      const report = await handles.sweeper.sweep()
+      await fn({ ...ctx, report, state: handles.state })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  }
+
+  // -- O1: the retention window parser (number = ms; string = 1-2 segments
+  //        in descending unit order; the discriminating vectors rejected)
+  eq('O1a: number windows are non-negative integer ms', [parseWindowMs(0).ms, parseWindowMs(900000).ms], [0, 900000])
+  ok('O1a: a negative, fractional or NaN number window is invalid', !parseWindowMs(-1).ok && !parseWindowMs(1.5).ok && !parseWindowMs(Number.NaN).ok)
+  eq('O1b: one-segment duration strings', [parseWindowMs('1d').ms, parseWindowMs('24h').ms, parseWindowMs('30m').ms, parseWindowMs('90s').ms, parseWindowMs('5000ms').ms], [86_400_000, 86_400_000, 1_800_000, 90_000, 5000])
+  eq('O1b: two-segment durations in descending unit order', [parseWindowMs('1h30m').ms, parseWindowMs('4h30m').ms, parseWindowMs('1m30s').ms, parseWindowMs('1s500ms').ms], [5_400_000, 16_200_000, 90_000, 1500])
+  ok(
+    'O1c: the discriminating vectors are all invalid (strict segment grammar)',
+    ['1h30m30s', '30m4h', '1w', '1h 30m', '30', '5000', 'h', '24H', '1ms2s', '1w30m', 'banana', ''].every((v) => !parseWindowMs(v).ok),
+  )
+  ok('O1c: the range guard rejects overflow', !parseWindowMs('900000000d').ok)
+
+  // -- O2: the retention log (round trip, single append write per line, the
+  //        torn-tail repair, the bad-line skip, the atomic rewrite)
+  {
+    const dir = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+    try {
+      const log = path.join(dir, 'sub', 'retention-log.jsonl')
+      const r0 = await readRetentionLog(log)
+      eq('O2a: reading a missing log is an empty, un-repaired read', [r0.entries.length, r0.repaired, r0.badLines], [0, false, 0])
+      await appendRetentionEntry(log, { id: 'a', createdAt: iso(1), unit: 'u1', cwd: '/x/w' })
+      await appendRetentionEntry(log, { id: 'b', createdAt: iso(2), unit: 'u2' })
+      const lines = readFileSync(log, 'utf8').split('\n')
+      eq('O2a: each append is exactly one complete line (single write per line)', lines.filter((l) => l !== '').length, 2)
+      ok('O2a: the cwd key is present for the first line and omitted for the second', lines[0].includes('"cwd":"/x/w"') && !lines[1].includes('cwd'))
+      const r1 = await readRetentionLog(log)
+      eq('O2a: the round trip preserves the entry shape and order', JSON.stringify(r1.entries), JSON.stringify([{ id: 'a', createdAt: iso(1), unit: 'u1', cwd: '/x/w' }, { id: 'b', createdAt: iso(2), unit: 'u2' }]))
+      const torn = path.join(dir, 'torn.jsonl')
+      writeFileSync(torn, `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\n{"id":"p","createdAt":"${iso(2)}","unit":"u"`)
+      const rt = await readRetentionLog(torn)
+      ok('O2b: a torn trailing line is repaired in place (back to the last newline)', rt.repaired === true && rt.entries.length === 1 && readFileSync(torn, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\n`)
+      await appendRetentionEntry(torn, { id: 'c', createdAt: iso(3), unit: 'u' })
+      ok('O2b: an append after the repair lands on its own line', readFileSync(torn, 'utf8').endsWith(`{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n`))
+      const torn2 = path.join(dir, 'torn2.jsonl')
+      writeFileSync(torn2, `{"id":"a","createdAt":"${iso(1)}","unit":"u"`) // no trailing newline
+      await appendRetentionEntry(torn2, { id: 'c', createdAt: iso(3), unit: 'u' })
+      const rt2 = await readRetentionLog(torn2)
+      ok('O2b: an append to a torn tail closes it first (the new line stays parseable)', readFileSync(torn2, 'utf8') === `{"id":"a","createdAt":"${iso(1)}","unit":"u"\n{"id":"c","createdAt":"${iso(3)}","unit":"u"}\n` && [rt2.entries.length, rt2.badLines, rt2.repaired].join() === '1,1,false')
+      const bad = path.join(dir, 'bad.jsonl')
+      writeFileSync(bad, `{"id":"a","createdAt":"${iso(1)}","unit":"u"}\nnot json\n{"id":"b","createdAt":"${iso(2)}","unit":"u"}\n`)
+      const rb = await readRetentionLog(bad)
+      eq('O2c: unparseable lines are skipped and counted', [rb.entries.length, rb.badLines, rb.repaired], [2, 1, false])
+      await rewriteRetentionLog(log, [r1.entries[1]])
+      const r2 = await readRetentionLog(log)
+      eq('O2d: the compaction rewrite keeps exactly the survivors, in order', r2.entries.map((e) => e.id), ['b'])
+      ok('O2d: no temp file remains after the rewrite', !existsSync(`${log}.tmp`))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  // -- O3: the offload batch knob (env TIMER_OFFLOAD_BATCH: the positive
+  //        integer or the warn-and-keep degradation), the unit-default window
+  //        parser (env TIMER_SESSION_RETENTION), and the windows themselves
+  //        through the unit-window view (O9h explicit values, O9i the default)
+  {
+    eq('O3a: an absent knob falls back to the default', parseOffloadBatch(undefined, () => {}), 50)
+    eq('O3a: a valid knob value is used', parseOffloadBatch('7', () => {}), 7)
+    eq('O3a: the default constant is 50', DEFAULT_OFFLOAD_BATCH, 50)
+    const warns = []
+    for (const v of ['0', '-2', 'abc', '5.5']) parseOffloadBatch(v, (m) => warns.push(m))
+    eq('O3b: each invalid knob value warns and falls back to the default', [warns.length, parseOffloadBatch('0', () => {})], [4, 50])
+    ok('O3b: the warning names the knob', warns.every((m) => m.includes('TIMER_OFFLOAD_BATCH')))
+    eq('O3c: an absent unit default is 0 (no warning)', [parseUnitDefaultWindowMs(undefined, (m) => warns.push(m)), warns.length], [0, 4])
+    eq('O3c: a duration default parses to ms', parseUnitDefaultWindowMs('24h', () => {}), 86_400_000)
+    eq('O3c: a bare ms-unit string default is valid', parseUnitDefaultWindowMs('5000ms', () => {}), 5000)
+    eq('O3c: a bare numeric string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('30', (m) => warns.push(m)), warns.length], [0, 5])
+    eq('O3c: the zero string default is invalid (warn + 0)', [parseUnitDefaultWindowMs('0', (m) => warns.push(m)), warns.length], [0, 6])
+    eq('O3c: an empty default is invalid (warn + 0)', [parseUnitDefaultWindowMs('', (m) => warns.push(m)), warns.length], [0, 7])
+    eq('O3c: a garbage default warns and falls back to 0', parseUnitDefaultWindowMs('banana', (m) => warns.push(m)), 0)
+    ok('O3c: the default-window warnings name the knob and the value', warns.some((m) => m.includes('TIMER_SESSION_RETENTION=30')) && warns.some((m) => m.includes('TIMER_SESSION_RETENTION=0')) && warns.some((m) => m.includes('banana')))
+  }
+
+  // -- O4: round health (the disabled branches: unreachable service, missing
+  //        store root, the mount mismatch; the registry fallback)
+  {
+    await runCase(
+      ({ home, storeRoot }) => {
+        mkdirSync(storeRoot)
+        return makeSweeper(home, { storeRoot, services: {} })
+      },
+      ({ report, state }) => {
+        ok('O4a: an unreachable persistence service skips the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('persistence service is unreachable')))
+        eq('O4a: the skipped round performs no action', [report.candidates, report.offloaded, report.balance], [0, 0, 0])
+      },
+    )
+    await runCase(
+      ({ home, storeRoot }) => {
+        // The store root is never created (missing on this host).
+        return makeSweeper(home, { storeRoot, services: { sessionPersistence: makeSpService(storeRoot) } })
+      },
+      ({ report, state }) => {
+        ok('O4b: a missing store root disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('store root is missing')))
+      },
+    )
+    await runCase(
+      ({ home, storeRoot }) => {
+        mkdirSync(storeRoot)
+        return makeSweeper(home, {
+          storeRoot,
+          services: { sessionPersistence: makeSpService(storeRoot) },
+          devOf: (p) => Promise.resolve(p.includes(OFFLOAD_ARCHIVE_DIR) ? 1 : 2),
+        })
+      },
+      ({ report, state }) => {
+        ok('O4c: a mount mismatch disables the round with a warning', report.disabled !== undefined && state.warns.some((m) => m.includes('different mounts')))
+      },
+    )
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        const handles = makeSweeper(home, {
+          storeRoot,
+          units: mapJob(),
+          services: { sessionPersistence: makeSpService(storeRoot) },
+          now: () => T0,
+        })
+        makeSessionDir(storeRoot, 'o4', CWD)
+        await appendRetentionEntry(logPath, { id: 'o4', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return handles
+      },
+      ({ report, state }) => {
+        ok('O4d: an unreachable registry falls back to the in-flight set with a warning', report.offloaded === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
+      },
+    )
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        const inflight = new Set(['o4'])
+        const handles = makeSweeper(home, {
+          storeRoot,
+          units: mapJob(),
+          inflight,
+          services: { sessionPersistence: makeSpService(storeRoot) },
+          now: () => T0,
+        })
+        makeSessionDir(storeRoot, 'o4', CWD)
+        await appendRetentionEntry(logPath, { id: 'o4', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return handles
+      },
+      async ({ report, state, logPath }) => {
+        ok('O4d: with the registry unreachable the in-flight set alone gates liveness', report.skippedLive === 1 && state.warns.some((m) => m.includes('registry service is unreachable')))
+        eq('O4d: the live entry stays in the log', (await readRetentionLog(logPath)).entries.length, 1)
+      },
+    )
+  }
+
+  // -- O5: the sweep core (window semantics, the existence table, the
+  //        liveness rollback, the retry, the unit-gone rule)
+  {
+    // Cell 1: source present, destination absent (the normal path).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'c1', CWD)
+        await appendRetentionEntry(logPath, { id: 'c1', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, storeRoot, archiveDir, logPath }) => {
+        eq('O5a: the over-window settled session is offloaded', [report.offloaded, report.candidates], [1, 1])
+        ok('O5a: the session dir left the store and entered the archive', !existsSync(path.join(storeRoot, 'a', 'c1')) && existsSync(path.join(archiveDir, 'c1')))
+        eq('O5a: the completed line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+      },
+    )
+    // Cell 2: neither side (the session was cleaned up externally).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        await appendRetentionEntry(logPath, { id: 'c2', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, logPath }) => {
+        eq('O5b: a session found on neither side completes without action', [report.sourceGone, report.offloaded], [1, 0])
+        eq('O5b: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+      },
+    )
+    // Cell 3: destination present, source absent (an earlier round already moved it).
+    await runCase(
+      async ({ home, storeRoot, logPath, archiveDir }) => {
+        mkdirSync(storeRoot)
+        mkdirSync(path.join(archiveDir, 'c3'), { recursive: true })
+        await appendRetentionEntry(logPath, { id: 'c3', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, logPath }) => {
+        eq('O5c: a session already in the archive completes without action', [report.alreadyArchived, report.offloaded], [1, 0])
+        eq('O5c: its line is removed by the compaction rewrite', (await readRetentionLog(logPath)).entries.length, 0)
+      },
+    )
+    // Cell 4: both sides present (a deployment anomaly: neither side is touched).
+    await runCase(
+      async ({ home, storeRoot, logPath, archiveDir }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'c4', CWD)
+        mkdirSync(path.join(archiveDir, 'c4'), { recursive: true })
+        await appendRetentionEntry(logPath, { id: 'c4', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, storeRoot, archiveDir, logPath, state }) => {
+        eq('O5d: a both-sides-present session is an error, both sides untouched', [report.errors, report.offloaded], [1, 0])
+        ok('O5d: the anomaly is logged for manual resolution', state.warns.some((m) => m.includes('c4') && m.includes('manual resolution')))
+        ok('O5d: both sides still exist and the line survives the round', existsSync(path.join(storeRoot, 'a', 'c4')) && existsSync(path.join(archiveDir, 'c4')) && (await readRetentionLog(logPath)).entries.length === 1)
+      },
+    )
+    // A rename failure (EIO): the entry is kept and the next round retries.
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'eio', CWD)
+        await appendRetentionEntry(logPath, { id: 'eio', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const err = new Error('i/o error')
+        err.code = 'EIO'
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
+      },
+      async ({ report, storeRoot, logPath, state }) => {
+        eq('O5e: a failed rename keeps the entry and the source', [report.errors, report.offloaded], [1, 0])
+        ok('O5e: the failure is logged and the retry is announced', state.warns.some((m) => m.includes('eio') && m.includes('retried next round')))
+        ok('O5e: the source dir is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eio')) && (await readRetentionLog(logPath)).entries.length === 1)
+      },
+    )
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'eio', CWD)
+        await appendRetentionEntry(logPath, { id: 'eio', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      ({ report, archiveDir }) => {
+        eq('O5e: the next round (failure gone) offloads the same entry', [report.offloaded, report.errors], [1, 0])
+        ok('O5e: the retry landed in the archive', existsSync(path.join(archiveDir, 'eio')))
+      },
+    )
+    // A rename that reports ENOENT (the source vanished between the check and the move).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'eno', CWD)
+        await appendRetentionEntry(logPath, { id: 'eno', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const err = new Error('no such file')
+        err.code = 'ENOENT'
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
+      },
+      async ({ report, logPath }) => {
+        eq('O5f: a rename ENOENT converges to source-gone', [report.sourceGone, report.errors], [1, 0])
+        eq('O5f: the entry completed and its line was removed', (await readRetentionLog(logPath)).entries.length, 0)
+      },
+    )
+    // A rename that reports EEXIST with the source gone (an earlier round moved it).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'eex', CWD)
+        await appendRetentionEntry(logPath, { id: 'eex', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const err = new Error('file exists')
+        err.code = 'EEXIST'
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: async (s) => { rmSync(s, { recursive: true, force: true }); throw err } })
+      },
+      async ({ report, logPath }) => {
+        eq('O5g: an EEXIST with the source gone means the offload already happened', [report.alreadyArchived, report.errors], [1, 0])
+        eq('O5g: the entry completed', (await readRetentionLog(logPath)).entries.length, 0)
+      },
+    )
+    // A rename that reports EEXIST with the source still present (a true conflict).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'eex', CWD)
+        await appendRetentionEntry(logPath, { id: 'eex', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const err = new Error('file exists')
+        err.code = 'EEXIST'
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0, move: () => Promise.reject(err) })
+      },
+      async ({ report, storeRoot, logPath }) => {
+        eq('O5g: an EEXIST with the source present is an error, both sides kept', [report.errors, report.offloaded], [1, 0])
+        ok('O5g: the source is intact and the line survives', existsSync(path.join(storeRoot, 'a', 'eex')) && (await readRetentionLog(logPath)).entries.length === 1)
+      },
+    )
+    // The locate call itself throws (a broken persistence backend).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        const broken = { locate: () => { throw new Error('backend down') } }
+        await appendRetentionEntry(logPath, { id: 'loc', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: broken, sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, logPath, state }) => {
+        eq('O5h: a locate failure keeps the entry for the next round', [report.errors, report.offloaded], [1, 0])
+        ok('O5h: the failure is logged with the session id', state.warns.some((m) => m.includes('locating session loc failed')))
+        eq('O5h: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
+      },
+    )
+    // The liveness rollback: the session goes live between the gate and the move.
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'rb', CWD)
+        await appendRetentionEntry(logPath, { id: 'rb', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const reg = makeRegistry()
+        const handles = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: reg }, now: () => T0 })
+        return {
+          sweeper: new OffloadSweeper({
+            ctx: { get: (name) => (name === 'sessionPersistence' ? makeSpService(handles.storeRoot) : name === 'sessions' ? reg : undefined), logger: () => ({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} }) },
+            logger: { warn: () => {}, error: () => {}, info: () => {}, debug: () => {} },
+            home: { base: path.join(home, OFFLOAD_HOME_BASE), archive: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR), log: logPath, storeRoot: handles.storeRoot },
+            units: () => mapJob(),
+            inflight: new Set(),
+            cap: DEFAULT_OFFLOAD_BATCH,
+            now: () => T0,
+            move: async () => {
+              reg.known.add('rb') // the session goes live in the gap
+            },
+          }),
+          state: handles.state,
+        }
+      },
+      async ({ report, storeRoot, archiveDir, logPath }) => {
+        eq('O5i: a session that goes live in the gap is neither offloaded nor an error', [report.offloaded, report.errors, report.skippedLive], [0, 0, 0])
+        ok('O5i: the rollback moved the session back to the store', existsSync(path.join(storeRoot, 'a', 'rb')) && !existsSync(path.join(archiveDir, 'rb')))
+        eq('O5i: the entry is kept for the next round', (await readRetentionLog(logPath)).entries.length, 1)
+      },
+    )
+    // The unit-gone rule: no age check, the liveness gate still applies.
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'ug', CWD)
+        await appendRetentionEntry(logPath, { id: 'ug', createdAt: iso(T0 - 1000), unit: 'ghost', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      ({ report, archiveDir }) => {
+        eq('O5j: a vanished unit is offloaded immediately, regardless of age', [report.offloaded, report.candidates], [1, 1])
+        ok('O5j: the fresh (within-window-age) session was moved', existsSync(path.join(archiveDir, 'ug')))
+      },
+    )
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'ugl', CWD)
+        const reg = makeRegistry(['ugl'])
+        await appendRetentionEntry(logPath, { id: 'ugl', createdAt: iso(T0 - 1000), unit: 'ghost', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: reg }, now: () => T0 })
+      },
+      ({ report }) => {
+        eq('O5j: the liveness gate still applies to a vanished unit', [report.skippedLive, report.offloaded], [1, 0])
+      },
+    )
+    // The window-0 unit (retention closed): entries are kept, never candidates.
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'keep', CWD)
+        await appendRetentionEntry(logPath, { id: 'keep', createdAt: iso(T0 - 10 * 365 * W), unit: 'cold', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: new Map([['cold', 0]]), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      async ({ report, logPath }) => {
+        eq('O5k: a window-0 unit keeps even ancient entries', [report.candidates, report.offloaded], [0, 0])
+        eq('O5k: the line survives', (await readRetentionLog(logPath)).entries.length, 1)
+      },
+    )
+    // Reopening the window re-manages the retained entries (over-window
+    // offloaded, within-window kept).
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'old', CWD)
+        makeSessionDir(storeRoot, 'new', CWD)
+        await appendRetentionEntry(logPath, { id: 'old', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        await appendRetentionEntry(logPath, { id: 'new', createdAt: iso(T0 - 1000), unit: 'job', cwd: CWD })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      ({ report, archiveDir, storeRoot }) => {
+        eq('O5l: the reopened window offloads the over-window entries and keeps the fresh one', [report.offloaded, report.candidates], [1, 1])
+        ok('O5l: the over-window session is archived, the fresh one stays in the store', existsSync(path.join(archiveDir, 'old')) && existsSync(path.join(storeRoot, 'a', 'new')))
+      },
+    )
+    // A cwd-less entry resolves through the _no-cwd project dir.
+    await runCase(
+      async ({ home, storeRoot, logPath }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'nc', undefined)
+        await appendRetentionEntry(logPath, { id: 'nc', createdAt: iso(T0 - 2 * W), unit: 'job' })
+        return makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+      },
+      ({ report, archiveDir }) => {
+        eq('O5m: a cwd-less entry is offloaded through the no-cwd project dir', [report.offloaded, report.errors], [1, 0])
+        ok('O5m: the archive copy is named after the session id', existsSync(path.join(archiveDir, 'nc')))
+      },
+    )
+    // The archive dir is rebuilt after external deletion (the next round heals).
+    await runCase(
+      async ({ home, storeRoot, logPath, archiveDir }) => {
+        mkdirSync(storeRoot)
+        makeSessionDir(storeRoot, 'h1', CWD)
+        makeSessionDir(storeRoot, 'h2', CWD)
+        await appendRetentionEntry(logPath, { id: 'h1', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        await appendRetentionEntry(logPath, { id: 'h2', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        const handles = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        await handles.sweeper.sweep() // the first round: both offloaded, the archive exists
+        rmSync(archiveDir, { recursive: true, force: true }) // the operator wiped it
+        makeSessionDir(storeRoot, 'h3', CWD)
+        await appendRetentionEntry(logPath, { id: 'h3', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        return handles
+      },
+      ({ report, archiveDir }) => {
+        eq('O5n: after the archive dir was deleted externally the next round rebuilds it and continues', [report.offloaded, report.errors], [1, 0])
+        ok('O5n: the rebuilt archive holds the new offload', existsSync(path.join(archiveDir, 'h3')))
+      },
+    )
+  }
+
+  // -- O6: the per-sweep budget (file order, the oldest-first identity, the
+  //        knob, the compaction regimes, sweep idempotency)
+  {
+    // 51 candidates with the default cap of 50: the first round takes the
+    // fifty oldest (file order), the second round the remainder.
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        for (let i = 0; i < 51; i++) {
+          const id = `n${String(i).padStart(2, '0')}`
+          makeSessionDir(storeRoot, id, CWD)
+          await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        }
+        const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const first = await sweeper.sweep()
+        eq('O6a: the first round offloads exactly the budget', [first.offloaded, first.candidates], [50, 50])
+        eq('O6a: the identity is the fifty oldest entries, in file order', JSON.stringify((await readRetentionLog(logPath)).entries.map((e) => e.id)), JSON.stringify(['n50']))
+        const second = await sweeper.sweep()
+        eq('O6a: the second round offloads the single remainder', [second.offloaded, second.candidates], [1, 1])
+        eq('O6a: the log is empty after both rounds', (await readRetentionLog(logPath)).entries.length, 0)
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // The knob: cap 3 over five candidates (three offloaded in file order, then two).
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        for (const id of ['k1', 'k2', 'k3', 'k4', 'k5']) {
+          makeSessionDir(storeRoot, id, CWD)
+          await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        }
+        const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), cap: 3, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const first = await sweeper.sweep()
+        eq('O6b: a valid knob value caps the round', [first.offloaded, first.candidates], [3, 3])
+        const second = await sweeper.sweep()
+        eq('O6b: the remainder drains on the next round', second.offloaded, 2)
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // Compaction regime 1: the rate fits the budget (the file drains to
+    // steady state, the second round is a zero-action no-op).
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        for (let i = 0; i < 30; i++) {
+          const id = `s${i}`
+          makeSessionDir(storeRoot, id, CWD)
+          await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        }
+        const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const first = await sweeper.sweep()
+        eq('O6c: the rate within the budget drains the file in one round', [first.offloaded, first.removedLines, first.balance], [30, 30, 0])
+        eq('O6c: the compaction ratio triggered the rewrite', first.completedRatio, 1)
+        const second = await sweeper.sweep()
+        eq('O6c: the next round is a zero-action no-op (sweep idempotency)', [second.candidates, second.offloaded, second.removedLines, second.balance, second.increment], [0, 0, 0, 0, 0])
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // Compaction regime 2: the rate exceeds the budget (the rewrite runs
+    // while the completed share stays high; the balance creeps up by the
+    // overrun per round).
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        const archiveDir = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR)
+        mkdirSync(storeRoot)
+        const { sweeper } = makeSweeper(home, { storeRoot, units: mapJob(), cap: 3, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const rounds = []
+        for (let r = 0; r < 3; r++) {
+          for (let i = 0; i < 5; i++) {
+            const id = `r${r}${i}`
+            makeSessionDir(storeRoot, id, CWD)
+            await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+          }
+          rounds.push(await sweeper.sweep())
+        }
+        eq('O6d: the over-budget rate rewrites while the completed share stays high', JSON.stringify(rounds.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[3, 3, 2], [3, 3, 4], [3, 3, 6]]))
+        ok('O6d: every offload landed in the archive', existsSync(path.join(archiveDir, 'r00')) && existsSync(path.join(archiveDir, 'r13')))
+        eq('O6d: the file line count equals the reported balance', readFileSync(logPath, 'utf8').trim().split('\n').length, 6)
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+  }
+
+  // -- O7: the trend alert (the consecutive over-envelope increments, the
+  //        healthy negatives, the out-of-regime dormant branch, the knob
+  //        recovery)
+  {
+    // Positive: the arrivals keep exceeding the budget for K rounds in a row.
+    // (The first round only re-derives the balance baseline: it never judges.)
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        const { sweeper } = makeSweeper(home, { storeRoot, units: new Map([['cold', 0]]), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const results = []
+        for (let r = 0; r < 13; r++) {
+          for (let i = 0; i < 60; i++) await appendRetentionEntry(logPath, { id: `t${r}-${i}`, createdAt: iso(T0), unit: 'cold' })
+          results.push(await sweeper.sweep())
+        }
+        const alerts = results.map((rp) => rp.trendAlert)
+        eq('O7a: the alert fires exactly on the K-th consecutive over-envelope sweep', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true, true]))
+        eq('O7a: the balance grows by the arrivals each round', results[12].balance, 13 * 60)
+        eq('O7a: the reported increment is the arrivals', results[12].increment, 60)
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // Healthy negative: bursts shorter than K rounds reset the counter.
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        const { sweeper } = makeSweeper(home, { storeRoot, units: new Map([['cold', 0]]), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const results = []
+        for (let r = 0; r < 8; r++) {
+          const burst = r < 3 ? 60 : 0
+          for (let i = 0; i < burst; i++) await appendRetentionEntry(logPath, { id: `h${r}-${i}`, createdAt: iso(T0), unit: 'cold' })
+          results.push(await sweeper.sweep())
+        }
+        ok('O7b: a burst shorter than K rounds never alerts', results.every((rp) => !rp.trendAlert))
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // At the boundary: arrivals equal to the budget are not over it (strict).
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        const { sweeper } = makeSweeper(home, { storeRoot, units: new Map([['cold', 0]]), services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }, now: () => T0 })
+        const results = []
+        for (let r = 0; r < 12; r++) {
+          for (let i = 0; i < 50; i++) await appendRetentionEntry(logPath, { id: `b${r}-${i}`, createdAt: iso(T0), unit: 'cold' })
+          results.push(await sweeper.sweep())
+        }
+        ok('O7c: arrivals at exactly the budget never alert (the comparison is strict)', results.every((rp) => !rp.trendAlert))
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // Out of regime: the rate is at least four times the budget (the
+    // compaction trigger stays dormant, the alert is the visible signal);
+    // raising the knob recovers it and flushes the completed backlog.
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        const services = { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }
+        const units = mapJob()
+        const quiet = () => ({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} })
+        const mkCtx = () => ({
+          get: (name) => (services[name] !== undefined ? services[name] : undefined),
+          logger: () => quiet(),
+        })
+        let sweeper = new OffloadSweeper({
+          ctx: mkCtx(),
+          logger: quiet(),
+          home: { base: path.join(home, OFFLOAD_HOME_BASE), archive: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR), log: logPath, storeRoot },
+          units: () => units,
+          inflight: new Set(),
+          cap: 5,
+          now: () => T0,
+        })
+        const results = []
+        for (let r = 0; r < 12; r++) {
+          for (let i = 0; i < 21; i++) {
+            const id = `o${r}-${i}`
+            makeSessionDir(storeRoot, id, CWD)
+            await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+          }
+          results.push(await sweeper.sweep())
+        }
+        const alerts = results.map((rp) => rp.trendAlert)
+        eq('O7d: the out-of-regime rate alerts after K consecutive rounds', JSON.stringify(alerts), JSON.stringify([false, false, false, false, false, false, false, false, false, false, true, true]))
+        ok('O7d: the compaction trigger stayed dormant through the whole burst', results.every((rp) => rp.removedLines === 0 && rp.completedRatio < COMPACTION_RATIO))
+        eq('O7d: the deadweight backlog accumulated in the log file', readFileSync(logPath, 'utf8').trim().split('\n').length, 12 * 21)
+        // The operator raises the knob: a fresh instance (like a process
+        // restart) re-derives the baseline and the streak starts over.
+        sweeper = new OffloadSweeper({
+          ctx: mkCtx(),
+          logger: quiet(),
+          home: { base: path.join(home, OFFLOAD_HOME_BASE), archive: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR), log: logPath, storeRoot },
+          units: () => units,
+          inflight: new Set(),
+          cap: 25,
+          now: () => T0,
+        })
+        const recovery = []
+        for (let r = 0; r < 3; r++) {
+          recovery.push(await sweeper.sweep())
+        }
+        eq('O7d: the raised knob re-enables the compaction trigger and flushes the backlog', JSON.stringify(recovery.map((rp) => [rp.offloaded, rp.removedLines, rp.balance])), JSON.stringify([[25, 85, 167], [25, 0, 167], [25, 50, 117]]))
+        ok('O7d: no trend alert under the recovered budget', recovery.every((rp) => !rp.trendAlert))
+        const survivors = (await readRetentionLog(logPath)).entries
+        eq('O7d: only the pending (never-offloaded) lines survived the flush', survivors.length, 117)
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // O7e: the alert line content (growth rate = (increment - cap) per sweep
+    // and the branch discriminator: dormant out-of-regime vs active in-regime).
+    {
+      for (const [arrivals, cap, dormant] of [[21, 5, true], [12, 10, false]]) {
+        const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+        try {
+          const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+          const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+          const services = { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }
+          const units = mapJob()
+          const warns = []
+          const mkLog = () => ({ warn: (m) => warns.push(m), error: () => {}, info: () => {}, debug: () => {} })
+          const sweeper = new OffloadSweeper({
+            ctx: {
+              get: (name) => (services[name] !== undefined ? services[name] : undefined),
+              logger: () => mkLog(),
+            },
+            logger: mkLog(),
+            home: { base: path.join(home, OFFLOAD_HOME_BASE), archive: path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR), log: logPath, storeRoot },
+            units: () => units,
+            inflight: new Set(),
+            cap,
+            now: () => T0,
+          })
+          for (let r = 0; r < 12; r++) {
+            for (let i = 0; i < arrivals; i++) {
+              const id = `x${arrivals}-${r}-${i}`
+              makeSessionDir(storeRoot, id, CWD)
+              await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+            }
+            await sweeper.sweep()
+          }
+          const alert = warns.find((m) => m.includes('trend alert'))
+          const want = dormant
+            ? ['growth rate 16/sweep', 'permanently dormant', 'completed lines are never evicted', 'check the offload batch knob first']
+            : ['growth rate 2/sweep', 'still active', 'raise the offload batch knob or lower the dispatch rate']
+          ok(
+            `O7e: the alert line carries the ${dormant ? 'dormant-branch' : 'active-branch'} content`,
+            alert !== undefined && want.every((f) => alert.includes(f)),
+            alert,
+          )
+          sweeper.dispose()
+        } finally {
+          rmSync(home, { recursive: true, force: true })
+        }
+      }
+    }
+  }
+
+  // -- O8: the periodic arming (the immediate first round, the disposer)
+  {
+    const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+    try {
+      const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+      mkdirSync(storeRoot)
+      const { sweeper, state } = makeSweeper(home, { storeRoot, services: { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() } })
+      sweeper.start()
+      ok('O8a: start arms an immediate first round', await waitFor(() => state.infos.some((m) => m.includes('sweep done')), 2000))
+      sweeper.start() // re-arming is a no-op
+      sweeper.dispose()
+      ok('O8a: dispose stops the timer without error', true)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  }
+
+  // -- O9: the run-lifecycle integration (the write gate through the real
+  //        startRun chain, the in-flight lifecycle, the end-to-end archive
+  //        move, and the unit-window view over a live scheduler)
+  {
+    const { startRun } = await import(path.join(PKG, 'lib/runner.js'))
+    let probeSeq = 0
+    // Drive the real startRun with a stub agent, wired to the OffloadSweeper's
+    // hook methods exactly as the plugin assembly does (onRunStarted /
+    // onDispatch from the runner entry, onRunSettled from the scheduler's
+    // onRunEnd, mirrored here as the onRunEnd callback). The sweeper's clock
+    // is mutable so a case can age the dispatched entry past its window.
+    async function probe({ windowMs, cwd, hang = false } = {}) {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+      const pluginHome = path.join(home, OFFLOAD_HOME_BASE)
+      const logPath = path.join(pluginHome, OFFLOAD_LOG_FILE)
+      mkdirSync(storeRoot)
+      const registry = makeRegistry()
+      const { ctx, state } = fakeCtx({ sessionPersistence: makeSpService(storeRoot), sessions: registry })
+      const inflight = new Set()
+      // startRun's hard dependencies, mirrored from the settlement probe:
+      // create resolves the stub agent, the deadlines never fire.
+      ctx.agents = { create: async () => ({ agent, dispose: async () => {} }) }
+      ctx.timeout = () => () => {}
+      const clock = { t: T0 }
+      const sweeper = new OffloadSweeper({
+        ctx,
+        logger: ctx.logger(),
+        home: { base: pluginHome, archive: path.join(pluginHome, OFFLOAD_ARCHIVE_DIR), log: logPath, storeRoot },
+        units: () => (windowMs === undefined ? new Map() : new Map([['job-x', windowMs]])),
+        inflight,
+        cap: DEFAULT_OFFLOAD_BATCH,
+        now: () => clock.t,
+      })
+      const sessionId = `sess-probe-${probeSeq}`
+      probeSeq += 1
+      const agent = {
+        session: { snapshotEvents: () => [] },
+        cancel: () => {},
+        followup: () => Promise.resolve(undefined),
+        whenIdle: () => (hang ? new Promise(() => {}) : Promise.resolve(undefined)),
+      }
+      const run = {
+        jobId: 'job-x',
+        sessionId,
+        trigger: 'manual',
+        startedAt: Date.now(),
+        runId: `op-${sessionId}`,
+        finishedAt: 0,
+        status: 'running',
+        cause: null,
+        pendingCause: null,
+        followupError: null,
+        handle: null,
+        maxTimer: null,
+        settled: false,
+      }
+      const model = {
+        id: 'job-x',
+        spec: { run: { prompt: 'offload probe', ...(cwd !== undefined ? { cwd } : {}) } },
+        runtimeMaxMs: null,
+      }
+      const res = await startRun({
+        ctx,
+        logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+        model,
+        run,
+        onRunStart: () => {},
+        onRunEnd: () => sweeper.onRunSettled('job-x', sessionId),
+        offload: {
+          onRunStarted: (j, s) => sweeper.onRunStarted(j, s),
+          onDispatch: (j, s, c) => sweeper.onDispatch(j, s, c),
+        },
+      })
+      await sleep(hang ? 50 : 250) // settlement IIFE (whenIdle microtasks) completes
+      return { sweeper, inflight, storeRoot, pluginHome, logPath, sessionId, res, state, clock, registry, cwd }
+    }
+
+    // O9a: the write gate open — a dispatched settled session is logged with
+    // the session id, the job unit, the dispatch time and the run cwd.
+    {
+      const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-a') })
+      try {
+        eq('O9a: the run settles normally with the hooks wired', p.res.ok, true)
+        ok('O9a: the settled session leaves the in-flight set', p.inflight.size === 0)
+        ok('O9a: the write gate logged exactly the dispatched session', await waitFor(async () => {
+          if (!existsSync(p.logPath)) return false
+          return (await readRetentionLog(p.logPath)).entries.length === 1
+        }, 4000))
+        const line = (await readRetentionLog(p.logPath)).entries[0]
+        ok('O9a: the log line carries the session id, the job unit, the dispatch time and the run cwd', line.id === p.sessionId && line.unit === 'job-x' && line.cwd === p.cwd && Date.parse(line.createdAt) === T0)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9b: the write gate closed — a zero window is not tracked.
+    {
+      const p = await probe({ windowMs: 0, cwd: path.join(tmpdir(), 'ws-b') })
+      try {
+        eq('O9b: the run settles normally with a zero window', p.res.ok, true)
+        await sleep(150) // the (skipped) retention append settles
+        ok('O9b: without a retention window the write gate logs nothing', existsSync(p.logPath) === false)
+        eq('O9b: the settled session leaves the in-flight set', p.inflight.size, 0)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9c: a vanished unit — the job no longer loads: the dispatch is untracked.
+    {
+      const p = await probe({ windowMs: undefined, cwd: path.join(tmpdir(), 'ws-c') })
+      try {
+        eq('O9c: the run settles normally for a vanished unit', p.res.ok, true)
+        await sleep(150)
+        ok('O9c: a vanished unit is not tracked at dispatch time', existsSync(p.logPath) === false)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9d: a cwd-less run fails at create before the write point: no line,
+    // the in-flight mark is still cleared at settlement.
+    {
+      const p = await probe({ windowMs: W })
+      try {
+        eq('O9d: a cwd-less run fails create_failed with the actionable remedy', [p.res.ok, p.res.error !== undefined && p.res.error.includes('no run cwd')], [false, true])
+        await sleep(150)
+        eq('O9d: the create-failed run clears the in-flight mark', p.inflight.size, 0)
+        ok('O9d: no retention line is written for a cwd-less run', existsSync(p.logPath) === false)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9e: the end-to-end chain — dispatch, settle, age past the window, sweep:
+    // the session dir is moved from the store into the archive and the line
+    // compacts away.
+    {
+      const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-e') })
+      try {
+        eq('O9e: the run settles with the hooks wired', p.res.ok, true)
+        makeSessionDir(p.storeRoot, p.sessionId, p.cwd) // the framework store side
+        p.clock.t = T0 + 30_000 // within the window
+        let rep = await p.sweeper.sweep()
+        eq('O9e: the within-window session is kept (not yet due)', [rep.offloaded, rep.skippedLive, rep.balance], [0, 0, 1])
+        p.clock.t = T0 + W + 1_000 // over the window
+        rep = await p.sweeper.sweep()
+        eq('O9e: the over-window settled session is offloaded', [rep.offloaded, rep.candidates], [1, 1])
+        ok('O9e: the session dir left the store and entered the archive', !existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && existsSync(path.join(p.pluginHome, OFFLOAD_ARCHIVE_DIR, p.sessionId)))
+        eq('O9e: the completed line is removed by the compaction rewrite', (await readRetentionLog(p.logPath)).entries.length, 0)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9f: the registry liveness gate — a session that went live after its
+    // settlement is not archived (the line and the source dir are kept).
+    {
+      const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-f') })
+      try {
+        eq('O9f: the run settles with the hooks wired', p.res.ok, true)
+        makeSessionDir(p.storeRoot, p.sessionId, p.cwd)
+        p.registry.known.add(p.sessionId) // went live again after settlement
+        p.clock.t = T0 + W + 1_000
+        const rep = await p.sweeper.sweep()
+        eq('O9f: the live session is kept out of the archive', [rep.skippedLive, rep.offloaded], [1, 0])
+        ok('O9f: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9g: the in-flight gate — an unsettled dispatch (the turn never ends)
+    // is marked in-flight until its settlement; the sweep must not archive it.
+    {
+      const p = await probe({ windowMs: W, cwd: path.join(tmpdir(), 'ws-g'), hang: true })
+      try {
+        eq('O9g: the dispatch succeeds even though the turn never settles', p.res.ok, true)
+        ok('O9g: the unsettled session stays in the shared in-flight set', p.inflight.has(p.sessionId) === true)
+        makeSessionDir(p.storeRoot, p.sessionId, p.cwd)
+        p.clock.t = T0 + W + 1_000
+        const rep = await p.sweeper.sweep()
+        eq('O9g: the in-flight session is not a candidate and not an error', [rep.skippedLive, rep.offloaded, rep.errors], [1, 0, 0])
+        ok('O9g: the source dir is intact and the line survives', existsSync(path.join(p.storeRoot, path.basename(p.cwd), p.sessionId)) && (await readRetentionLog(p.logPath)).entries.length === 1)
+        p.sweeper.dispose()
+      } finally {
+        rmSync(p.storeRoot, { recursive: true, force: true })
+        rmSync(p.pluginHome, { recursive: true, force: true })
+      }
+    }
+    // O9h: the unit-window view over a live scheduler (job file values:
+    // valid string / valid number / null / absent / invalid / disabled unit /
+    // rejected file), the warn dedupe, and hot updates through reload.
+    {
+      const { TimerScheduler } = await import(path.join(PKG, 'lib/scheduler.js'))
+      const base = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const jobsDir = path.join(base, 'jobs')
+        mkdirSync(jobsDir)
+        const spec = (extra = {}, enable) => {
+          const s = { onCalendar: ['2099-01-01T00:00:00Z'], run: { prompt: 'unit probe', ...extra } }
+          if (enable !== undefined) s.enable = enable
+          return JSON.stringify(s)
+        }
+        const file = (id, s) => writeFileSync(path.join(jobsDir, `${id}.json`), s)
+        file('w1', spec({ sessionRetention: '24h' }))
+        file('w2', spec({ sessionRetention: 900000 }))
+        file('w3', spec({ sessionRetention: null }))
+        file('w4', spec({}))
+        file('w5', spec({ sessionRetention: 'banana' }))
+        file('w6', spec({ sessionRetention: '1h30m' }, false))
+        file('w7', '{ not valid json')
+        const warns = []
+        const logger = { debug: () => {}, info: () => {}, warn: (m) => warns.push(m), error: () => {} }
+        const sched = new TimerScheduler({ ctx: {}, logger, jobsDir })
+        await sched.reload()
+        const windows = sched.unitWindows()
+        eq('O9h: a valid string window resolves to ms', windows.get('w1'), 86_400_000)
+        eq('O9h: a numeric window is ms', windows.get('w2'), 900000)
+        eq('O9h: a null window is 0 (retain)', windows.get('w3'), 0)
+        eq('O9h: an absent window is 0 (retain)', windows.get('w4'), 0)
+        eq('O9h: an invalid window warns and resolves to 0', windows.get('w5'), 0)
+        ok('O9h: the warning names the job and the invalid value', warns.some((m) => m.includes('w5') && m.includes('banana')))
+        eq('O9h: a disabled job is still a unit (its window applies)', windows.get('w6'), 5_400_000)
+        ok('O9h: a rejected job file is not a unit (vanished unit)', windows.has('w7') === false)
+        eq('O9h: the view carries every loaded job exactly once', windows.size, 6)
+        sched.unitWindows()
+        eq('O9h: the invalid-window warning is deduplicated across rounds', warns.filter((m) => m.includes('banana')).length, 1)
+        file('w5', spec({ sessionRetention: '4h30m' }))
+        await sched.reload()
+        const windows2 = sched.unitWindows()
+        eq('O9h: a hot update re-derives the window without a restart', windows2.get('w5'), 16_200_000)
+        eq('O9h: a repaired value leaves no new warning', warns.filter((m) => m.includes('w5')).length, 1)
+        file('w1', spec({ sessionRetention: '4h30m' }))
+        file('w2', '{ broken')
+        await sched.reload()
+        const windows3 = sched.unitWindows()
+        eq('O9h: a hot update changes a valid window', windows3.get('w1'), 16_200_000)
+        ok('O9h: a file that no longer parses drops its unit (vanished unit)', windows3.has('w2') === false)
+        file('w5', spec({ sessionRetention: 'h30m' }))
+        await sched.reload()
+        sched.unitWindows()
+        // the quoted value: the warning text carries an example duration whose
+        // tail overlaps the bare substring, so match the raw value as quoted.
+        eq('O9h: a changed invalid value warns again (the dedupe key is the raw value)', warns.filter((m) => m.includes('"h30m"')).length, 1)
+        await sched.stop()
+      } finally {
+        rmSync(base, { recursive: true, force: true })
+      }
+    }
+    // O9i: the unit-default window (the TIMER_SESSION_RETENTION env, boot-fixed
+    // through the scheduler option): jobs with absent/null run.sessionRetention take
+    // it; explicit values (valid or invalid) always take precedence; a rejected file
+    // is still not a unit.
+    {
+      const { TimerScheduler } = await import(path.join(PKG, 'lib/scheduler.js'))
+      const base = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const jobsDir = path.join(base, 'jobs')
+        mkdirSync(jobsDir)
+        const spec = (extra = {}) => JSON.stringify({ onCalendar: ['2099-01-01T00:00:00Z'], run: { prompt: 'unit probe', ...extra } })
+        const file = (id, s) => writeFileSync(path.join(jobsDir, `${id}.json`), s)
+        file('d1', spec({ sessionRetention: '24h' }))
+        file('d2', spec({ sessionRetention: 900000 }))
+        file('d3', spec({ sessionRetention: null }))
+        file('d4', spec({}))
+        file('d5', spec({ sessionRetention: 'banana' }))
+        file('d6', '{ not valid json')
+        const warns = []
+        const logger = { debug: () => {}, info: () => {}, warn: (m) => warns.push(m), error: () => {} }
+        const sched = new TimerScheduler({ ctx: {}, logger, jobsDir, defaultRetentionMs: 3_600_000 })
+        await sched.reload()
+        const windows = sched.unitWindows()
+        eq('O9i: an explicit string window takes precedence over the default', windows.get('d1'), 86_400_000)
+        eq('O9i: an explicit numeric window takes precedence over the default', windows.get('d2'), 900000)
+        eq('O9i: a null window takes the unit default', windows.get('d3'), 3_600_000)
+        eq('O9i: an absent window takes the unit default', windows.get('d4'), 3_600_000)
+        eq('O9i: an explicit invalid window warns and resolves to 0 (the default does not rescue it)', windows.get('d5'), 0)
+        ok('O9i: the warning names the job and the invalid value', warns.some((m) => m.includes('d5') && m.includes('banana')))
+        ok('O9i: a rejected job file is not a unit (vanished unit)', windows.has('d6') === false)
+        eq('O9i: the view carries every loaded job exactly once', windows.size, 5)
+        await sched.stop()
+      } finally {
+        rmSync(base, { recursive: true, force: true })
+      }
+    }
+  }
+
+  // -- O10: the lost-retention-log startup warning and the
+  //         append<->compaction mutex (the rewrite-window seam)
+  {
+    const mkSweeperCase = async (seed) => {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const archive = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot)
+        const services = { sessionPersistence: makeSpService(storeRoot), sessions: makeRegistry() }
+        const warns = []
+        const mkLog = () => ({ warn: (m) => warns.push(m), error: () => {}, info: () => {}, debug: () => {} })
+        seed(archive, home)
+        const sweeper = new OffloadSweeper({
+          ctx: { get: (n) => (services[n] !== undefined ? services[n] : undefined), logger: () => mkLog() },
+          logger: mkLog(),
+          home: { base: path.join(home, OFFLOAD_HOME_BASE), archive, log: logPath, storeRoot },
+          units: () => mapJob(),
+          inflight: new Set(),
+          cap: 50,
+          now: () => T0,
+        })
+        await sweeper.sweep()
+        await sweeper.sweep()
+        sweeper.dispose()
+        return warns.filter((m) => m.includes('retention log is missing'))
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    const fresh = await mkSweeperCase(() => {})
+    eq('O10a: a fresh install (no archive, no log) stays silent', fresh.length, 0)
+    const lost = await mkSweeperCase((archive) => {
+      mkdirSync(path.join(archive, 'x'), { recursive: true })
+      writeFileSync(path.join(archive, 'x', 'session.v4.jsonl.zstd'), 'log')
+    })
+    ok('O10b: the lost log warns prominently on startup (exactly once across rounds)', lost.length === 1, lost)
+    // O10c: park the compaction rewrite between its temp write and its rename,
+    // append across the window, and prove the mutex serializes the append onto
+    // the post-rename file (the line survives).
+    {
+      const home = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-'))
+      try {
+        const storeRoot = path.join(home, OFFLOAD_STORE_ROOT)
+        const archive = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_ARCHIVE_DIR)
+        const logPath = path.join(home, OFFLOAD_HOME_BASE, OFFLOAD_LOG_FILE)
+        mkdirSync(storeRoot, { recursive: true })
+        mkdirSync(archive, { recursive: true })
+        // Four entries pre-archived (completed), one live (kept by the
+        // rewrite): the round rewrites the log down to the live line.
+        const liveId = 'm4'
+        for (let i = 0; i < 5; i++) {
+          const id = `m${i}`
+          makeSessionDir(storeRoot, id, CWD)
+          await appendRetentionEntry(logPath, { id, createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        }
+        for (let i = 0; i < 4; i++) {
+          const { renameSync } = await import('node:fs')
+          renameSync(path.join(storeRoot, path.basename(CWD), `m${i}`), path.join(archive, `m${i}`))
+        }
+        let parked = false
+        let release
+        const gate = new Promise((r) => { release = r })
+        offload.rewriteBarrier.fn = async () => {
+          parked = true
+          await gate
+        }
+        const quiet = () => ({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} })
+        const sweeper = new OffloadSweeper({
+          ctx: {
+            get: (n) =>
+              n === 'sessionPersistence'
+                ? makeSpService(storeRoot)
+                : n === 'sessions'
+                  ? makeRegistry([liveId])
+                  : undefined,
+            logger: () => quiet(),
+          },
+          logger: quiet(),
+          home: { base: path.join(home, OFFLOAD_HOME_BASE), archive, log: logPath, storeRoot },
+          units: () => mapJob(),
+          inflight: new Set(),
+          cap: 50,
+          now: () => T0,
+        })
+        // A ref'd keep-alive handle: the parked rewrite and the queued
+        // append are pure promise chains, which alone would let the event
+        // loop empty and end the process mid-window.
+        const keepAlive = setInterval(() => {}, 50)
+        const run = sweeper.sweep()
+        await waitFor(() => parked)
+        // The append is created (queued behind the rewrite in the mutex) but
+        // not awaited yet: awaiting it before the release would deadlock,
+        // because the rewrite holds the mutex until its rename.
+        const pendingAppend = appendRetentionEntry(logPath, { id: 'mnew', createdAt: iso(T0 - 2 * W), unit: 'job', cwd: CWD })
+        release()
+        await pendingAppend
+        const rep = await run
+        clearInterval(keepAlive)
+        const after = (await readRetentionLog(logPath)).entries
+        ok(
+          'O10c: an append parked in the rewrite window survives the rewrite (the write mutex)',
+          rep.removedLines === 4 && after.length === 2 && after.some((e) => e.id === liveId) && after.some((e) => e.id === 'mnew'),
+          JSON.stringify([rep.removedLines, after.map((e) => e.id)]),
+        )
+        sweeper.dispose()
+      } finally {
+        offload.rewriteBarrier.fn = undefined
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+  }
+}
+{ // O11: the plugin-level layout pin (the G3 F1/F2 regression layer). The O-series
+  // fixtures validate the sweeper component under the real-world layout, but none of
+  // them constructs the plugin: this section pins, at the plugin level, the single
+  // layout definition the constructor delegates to (offloadLayout) - the retention
+  // log and the archive under the plugin home, the store root as the FRAMEWORK
+  // session store (a sibling of the plugin home, never under it) - and keeps the
+  // two files the offload plane ships in pure ASCII.
+  const offload = await import(path.join(PKG, 'lib/offload.js'))
+  {
+    // O11a: the layout helper resolves the four locations relative to the harness
+    // home; the store root must be its SIBLING (a direct root/<segment> join), not
+    // a child of the plugin home (the F1 defect: a phantom root under the plugin
+    // home that nothing ever creates, which disabled every sweep round).
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-timer-offload-layout-'))
+    try {
+      const lay = offload.offloadLayout((seg) => path.join(root, seg))
+      eq('O11a: the plugin home base is $DSH_HOME/dsh-timer', lay.base, path.join(root, 'dsh-timer'))
+      eq('O11a: the archive sits under the plugin home', lay.archive, path.join(root, 'dsh-timer', 'archived-sessions'))
+      eq('O11a: the retention log sits under the plugin home', lay.log, path.join(root, 'dsh-timer', 'retention-log.jsonl'))
+      eq('O11a: the store root is the framework store, a SIBLING of the plugin home', lay.storeRoot, path.join(root, 'sessions'))
+      ok('O11a: the store root is never a child of the plugin home', !lay.storeRoot.startsWith(lay.base + path.sep))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+  {
+    // O11b: the constructor delegates its wiring to the helper (a source-level pin -
+    // constructing the plugin in-package needs the full cordis container); a wiring
+    // that bypasses the helper or re-derives the store root under the plugin home
+    // fails here before it ships.
+    const indexSrc = readFileSync(path.join(PKG, 'src/index.ts'), 'utf8')
+    ok('O11b: the constructor wires the sweeper home through offloadLayout', indexSrc.includes('home: offloadLayout(resolveHome)'))
+    ok('O11b: the store root is never re-derived under the plugin home in the constructor', !indexSrc.includes('OFFLOAD_STORE_ROOT'))
+  }
+  {
+    // O11c: the two files the offload plane ships are pure ASCII (the reference
+    // plugin holds its shipped tree to strict ASCII; the pre-offload baseline files
+    // carry historic non-ASCII comments and remain tracked by the CJK guard).
+    for (const f of ['offload.ts', 'retention.ts']) {
+      const src = readFileSync(path.join(PKG, 'src', f), 'utf8')
+      ok(`O11c: src/${f} is pure ASCII`, /^[\x00-\x7F]*$/.test(src))
+    }
+  }
+}
 { // shipped-source hygiene guard: src/ stays self-contained and process-fact-free — a reader
   // needs only the file plus stable external authorities (systemd v262 semantics, the croner
   // API, framework API names). No CJK characters, no two-digit project version tags (a

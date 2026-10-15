@@ -251,6 +251,22 @@ function turnErrorMessage(reason: unknown): string {
   return typeof message === 'string' ? message : ''
 }
 
+/**
+ * Offload (retention plane) dispatch hooks (the plugin injects them; absent = offload
+ * inactive). The hooks are observability for the retention plane: they must not disturb
+ * run scheduling (the plugin wraps them defensively), and they are independent of the
+ * state-file bookkeeping below (the onRunStart callback can be skipped on the deleted-job
+ * path, so the in-flight mark is not derived from it).
+ */
+export interface OffloadDispatchHooks {
+  /** The run session starts (before the state-file registration and the cwd check): the
+   * retention plane marks the session in-flight. */
+  onRunStarted: (jobId: string, sessionId: string) => void
+  /** The run session is dispatched (after the cwd check and cwd creation, before the agent
+   * create): the retention line write point (the component applies its write gate). */
+  onDispatch: (jobId: string, sessionId: string, cwd: string) => void
+}
+
 export interface StartRunParams {
   ctx: Context
   logger: Logger
@@ -260,6 +276,8 @@ export interface StartRunParams {
   onRunStart: (model: JobModel, run: RunRecord, record: StateRun) => void
   /** Callback after the run settles (scheduler state file finalization + recomputeRunEnd). */
   onRunEnd: (model: JobModel, run: RunRecord, outcome: RunOutcome) => void
+  /** Offload (retention plane) dispatch hooks (see {@link OffloadDispatchHooks}); absent = offload inactive. */
+  offload?: OffloadDispatchHooks
 }
 
 export type StartRunResult = { ok: true } | { ok: false; error: string }
@@ -281,9 +299,14 @@ export type StartRunResult = { ok: true } | { ok: false; error: string }
  * cancel was a no-op) is delivered to the just-created agent so the settlement records a
  * truthful failed/cancelled.
  */
-export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }: StartRunParams): Promise<StartRunResult> {
+export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd, offload }: StartRunParams): Promise<StartRunResult> {
   const spec = model.spec.run
   const cwd = spec.cwd ?? null
+
+  // Offload (retention plane) in-flight mark: at the entry, before the state-file
+  // registration and the cwd check, so a sweep racing the create cannot miss the
+  // session (independent of the state bookkeeping, which the deleted-job path skips).
+  offload?.onRunStarted(model.id, run.sessionId)
 
   const record0: StateRun = {
     runId: run.runId,
@@ -327,6 +350,11 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd }
     // settles as failed/create_failed right after registration.
     return failCreate(`failed to create run directory ${cwd}: ${errMsg(err)}`)
   }
+
+  // Offload (retention plane) retention line write point: the cwd is known and exists
+  // (a cwd-less job returned create_failed above and is not tracked); the component's
+  // write gate decides whether a line is appended (the job's current window non-zero).
+  offload?.onDispatch(model.id, run.sessionId, cwd)
 
   const meta: { cwd: string; agentPreset?: string } = { cwd }
   const agentOptions = await resolveAgentOptions(ctx, spec.model)

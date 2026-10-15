@@ -8,6 +8,7 @@ dsh-timer gives a dsh deployment a built-in job scheduler: when a trigger expire
 - A per-job state file tracks the next trigger and the 50 most recent run records
 - systemd.timer-style behavior: persistent catch-up after downtime, overlap policies (skip/stop/allow), run-time limits, timezone and clock-rewind handling
 - Live rescan: the job directory is watched with a 500 ms debounce, so job edits take effect in seconds
+- Session offload: a per-minute sweep archives settled run sessions that outlived the job's `run.sessionRetention` window, keeping the framework session store bounded
 
 This README is the operations quick reference. The complete field reference with examples is [`schemas/job.schema.json`](./schemas/job.schema.json); usage details, examples, and troubleshooting live in the in-package skill [`skill/dsh-timer/SKILL.md`](./skill/dsh-timer/SKILL.md).
 
@@ -19,7 +20,7 @@ dsh-timer is an out-of-tree plugin for a dsh profile. Install it with the dsh pl
 dsh plugin --profile <name> add dsh-timer
 ```
 
-No configuration is required: the plugin registers itself and reads jobs from the job directory described below. One optional plugin config field refines the deployment's layout: `jobsDir` (the job directory, below).
+No configuration is required: the plugin registers itself and reads jobs from the job directory described below. One optional plugin config field refines the deployment's layout: `jobsDir` (the job directory, below). Its only other on-disk state is the session offload's retention log and archive under `$DSH_HOME/dsh-timer/` (see Session offload).
 
 ## Jobs
 
@@ -76,7 +77,7 @@ The table below is a quick reference; see `schemas/job.schema.json` for the comp
 | `deferReactivation` | boolean | `false` | Applies only to jobs that have onCalendar conditions (on other jobs the value is accepted and ignored). When `true`, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When `false`, the phase advances at every due moment even while a run is in progress. |
 | `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
 | `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends — a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
-| `run` | object (required) | — | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, and `policy` are optional — full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above). |
+| `run` | object (required) | — | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, `policy`, and `sessionRetention` are optional — full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above; `sessionRetention` is covered in the Session-offload section below). |
 
 Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (≈ 30 days), `y`/`year(s)` (≈ 365 days) — case-sensitive (`m` is minutes, `M` is months) — where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) — a JSON number is never accepted. A span shorter than half a millisecond rounds to 0 ms and makes the job fire on every tick; prefer values of at least 1 ms.
 
@@ -135,6 +136,15 @@ The plugin registers the `timer` tool, which exposes the following nine verbs, a
 | `delete` | deletes the job file and its state file (in-progress runs settle without writing state) |
 | `cancel` | cancels all in-progress runs of the job |
 
+## Session offload
+
+Job runs leave on-disk session logs in the framework session store; at run volume (frequent intervals, long prompts) the store grows without bound. The per-minute offload sweep archives settled run sessions once the job's effective retention window elapses, so the store stays bounded: the store is never deleted, only moved, a run that is still in flight is kept until it settles, and a job that vanishes from the job directory is offloaded immediately regardless of age.
+
+- **Windows**: `run.sessionRetention` is per-job (config layer: the job file's `run` block, hot-updated through the live rescan): a non-negative integer number of milliseconds, or a duration string of 1-2 digits+unit segments (units d/h/m/s/ms) in descending order (e.g. `24h`, `4h30m`, `90s`, `5000ms`; a bare numeric string is invalid). 0 / null / absent = the unit default (see below; no offload when it is 0); an invalid value warns and is treated as 0. A job without a `run.cwd` is never offloaded (its runs fail `create_failed` first).
+- **Unit default window**: `TIMER_SESSION_RETENTION` (env, read once at boot; a duration string like `24h` - a bare numeric string is invalid; absent = 0, invalid warns and falls back to 0) sets the default retention window for every job without an explicit `run.sessionRetention` (absent or null); an explicit job value always takes precedence over it.
+- **Budget**: `TIMER_OFFLOAD_BATCH` (env, default 50) bounds the sessions one sweep may process; an invalid value warns and falls back to 50, never disabling the sweep. When consecutive sweeps observe new log lines arriving faster than the budget, the sweep logs a trend warning (raise the knob or lower the retention windows; the warning takes no action on its own).
+- **Failure semantics**: an unreachable persistence service, a missing store root, or an archive on a different mount disables the sweep for that round (a visible warning; log lines are never lost); a failed individual move keeps the entry for the next round.
+
 ## Clock & timezone
 
 During operation the plugin detects the following wall-clock events:
@@ -175,4 +185,4 @@ The package entry is `lib/index.js`. Its default export `DshTimerPlugin` extends
 
 ### Selftest
 
-The selftest asserts the pure logic (util, time, cron, rearm, validator, and state) plus the croner test vectors against the compiled `lib/`. It also cross-checks the `timer` tool schema's null branches against `schemas/job.schema.json` as a source-level sync guard.
+The selftest asserts the pure logic (util, time, cron, rearm, validator, and state) plus the croner test vectors against the compiled `lib/`, covers the session-offload plane (window parsing, retention-log mechanics, the sweep's window/liveness/budget/trend semantics, the run-lifecycle write gate, and the layout pin), and cross-checks the `timer` tool schema's null branches against `schemas/job.schema.json` as a source-level sync guard.

@@ -96,6 +96,14 @@ check('job: policy enum violation', () =>
   expectInvalid(vJob, 'job: policy enum violation', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', policy: 'all' } }))
 check('job: unknown top-level key', () =>
   expectInvalid(vJob, 'job: unknown top-level key', { onCalendar: ['0 9 * * *'], run: { prompt: 'p' }, bogus: 1 }))
+check('job: sessionRetention duration string accepted (type-only: the syntax is checked at sweep time)', () =>
+  expectValid(vJob, 'job: sessionRetention string', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: '4h30m' } }))
+check('job: sessionRetention numeric ms accepted', () =>
+  expectValid(vJob, 'job: sessionRetention number', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: 900000 } }))
+check('job: sessionRetention null accepted (retain)', () =>
+  expectValid(vJob, 'job: sessionRetention null', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: null } }))
+check('job: sessionRetention wrong type rejected', () =>
+  expectInvalid(vJob, 'job: sessionRetention boolean', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: true } }))
 
 // ── state schema ──
 const goodState = { schemaVersion: 1, jobId: 'demo', lastActivationMs: null, lastTriggerMs: null, calendars: {}, runs: [] }

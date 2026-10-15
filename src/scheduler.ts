@@ -15,6 +15,7 @@ import { promises as fsp } from 'node:fs'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { JOB_ID_RE, FILE_RE, TICK_MS, CLOCK_JUMP_MS, PLUGIN_NAME, canonicalJson, errMsg, fmtErr, isPlainObject } from './util.js'
 import { validateJob } from './validator.js'
+import { parseWindowMs } from './retention.js'
 import { systemTimeZone, formatWall, makeTzChangeDetector, decodeSystemTimeZoneFromLocaltime } from './time.js'
 import { jobFileFor, stateDirFor, freshState, loadState, stateFileFor, pushRun, updateRun, type StateCalendar, type StateRun } from './state.js'
 import { recomputeLoad, recomputeRunEnd, recomputeClockRewind, recomputeTzChange, applyFire } from './rearm.js'
@@ -60,6 +61,16 @@ export class TimerScheduler {
   private readonly processStartMs = Date.now()
   /** /etc/localtime mtime change detector (system timezone switch detection). */
   private readonly detectTzChange: () => boolean
+  /** Offload (retention plane) hooks; undefined = offload inactive (the run lifecycle skips them). */
+  private readonly offload: SchedulerOptions['offload']
+  /** Unit-default retention window (ms; the TIMER_SESSION_RETENTION env, parsed at
+   * construction; 0 = no default): applies to jobs whose run.sessionRetention is unset
+   * (absent or null); an explicit job value always takes precedence over it. */
+  private readonly defaultRetentionMs: number
+  /** Offload plane's dispatch hook view handed to startRun (the settle hook runs in onRunEnd). */
+  private readonly offloadDispatch: { onRunStarted: (jobId: string, sessionId: string) => void; onDispatch: (jobId: string, sessionId: string, cwd: string) => void } | undefined
+  /** jobId -> raw run.sessionRetention value that last produced an invalid-window warning (warn dedupe). */
+  private readonly retentionWarned = new Map<string, string>()
   private readonly ctx: SchedulerOptions['ctx']
   private readonly logger: Logger
   /** Job directory (read-only externally). */
@@ -73,11 +84,17 @@ export class TimerScheduler {
   private tickInFlight = false
   private stopped = false
 
-  constructor({ ctx, logger, jobsDir }: SchedulerOptions) {
+  constructor({ ctx, logger, jobsDir, offload, defaultRetentionMs }: SchedulerOptions) {
     this.ctx = ctx
     this.logger = logger
     this.jobsDir = jobsDir
+    this.defaultRetentionMs = defaultRetentionMs ?? 0
     this.detectTzChange = makeTzChangeDetector()
+    this.offload = offload
+    this.offloadDispatch =
+      offload === undefined
+        ? undefined
+        : { onRunStarted: offload.onRunStarted, onDispatch: offload.onDispatch }
   }
 
   // ── State persistence ─────────────────────────────────────
@@ -264,6 +281,10 @@ export class TimerScheduler {
   }
 
   private onRunEnd(model: JobModel, run: RunRecord, outcome: RunOutcome): void {
+    // Offload (retention plane) settle hook: clears the in-flight mark for every settled
+    // run (all outcomes, including create_failed and runs of deleted jobs — above the
+    // deleted-job early return, independent of the state-file bookkeeping).
+    if (this.offload !== undefined) this.offload.onRunSettled(model.id, run.sessionId)
     const set = this.activeRuns.get(model.id)
     if (set) {
       set.delete(run)
@@ -321,6 +342,49 @@ export class TimerScheduler {
     // state file (manual runs of disabled jobs record their state too); removed or rejected
     // models write no state (the audit trail is the session log).
     if (live || this.disabledJobs.has(model.id)) this.voidSafePersist(target)
+  }
+
+  /**
+   * Offload (retention plane) unit windows: jobId -> current retention window in ms
+   * (0 = retain, no offload) for every loaded job model (both the enabled and the disabled
+   * registries). Rejected or deleted jobs are not units at all (a vanished unit: the
+   * offload plane applies the non-retention semantics to their pending lines).
+   * `run.sessionRetention` absent or `null` -> the unit-default window (the
+   * TIMER_SESSION_RETENTION env, parsed once at construction; 0 when the env is absent
+   * or invalid); an explicit invalid value warns (deduplicated per distinct raw value,
+   * so a persistently invalid file does not warn every round) and resolves to 0 (the
+   * default does not rescue an explicit invalid value) — the schema validates the type
+   * only; the syntax is judged by the retention parser. The job-file values are read
+   * live per sweep round: a hot-updated job file changes its window without a restart
+   * (the env default is boot-fixed like every other plugin env).
+   */
+  unitWindows(): ReadonlyMap<string, number> {
+    const windows = new Map<string, number>()
+    const add = (model: JobModel): void => {
+      const raw = model.spec.run.sessionRetention
+      if (raw === undefined || raw === null) {
+        windows.set(model.id, this.defaultRetentionMs)
+        this.retentionWarned.delete(model.id)
+        return
+      }
+      const parsed = parseWindowMs(raw)
+      if (parsed.ok) {
+        windows.set(model.id, parsed.ms)
+        this.retentionWarned.delete(model.id)
+        return
+      }
+      const key = JSON.stringify(raw)
+      if (this.retentionWarned.get(model.id) !== key) {
+        this.retentionWarned.set(model.id, key)
+        this.logger.warn(
+          `job ${model.id}: run.sessionRetention ${key} is not a valid retention window (a non-negative ms number or a duration string like 24h or 4h30m); it is treated as 0 (no automatic offload)`,
+        )
+      }
+      windows.set(model.id, 0)
+    }
+    for (const model of this.jobs.values()) add(model)
+    for (const model of this.disabledJobs.values()) add(model)
+    return windows
   }
 
   // ── Scan ──────────────────────────────────────────────────
@@ -775,7 +839,7 @@ export class TimerScheduler {
       // process could not settle. The .then continuation runs at create settlement time
       // (milliseconds for a fast failure, up to the deadline for a hung create) — it only
       // handles what onRunEnd cannot: the create_failed fire bookkeeping.
-      void startRun({ ctx: this.ctx, logger: this.logger, model, run, onRunStart: (m, rr, rec) => this.onRunStart(m, rr, rec), onRunEnd: (m, rr, o) => this.onRunEnd(m, rr, o) }).then(
+      void startRun({ ctx: this.ctx, logger: this.logger, model, run, onRunStart: (m, rr, rec) => this.onRunStart(m, rr, rec), onRunEnd: (m, rr, o) => this.onRunEnd(m, rr, o), offload: this.offloadDispatch }).then(
         (r) => {
           if (!r.ok) this.bookkeepCreateFailed(model, expired, monoFire, nowMs)
         },
@@ -1147,7 +1211,7 @@ export class TimerScheduler {
     // Arrow wrappers bind this (same as the tick path; a raw method reference would lose this)
     let createError: string | null = null
     try {
-      const r = await startRun({ ctx: this.ctx, logger: this.logger, model, run, onRunStart: (m, rr, rec) => this.onRunStart(m, rr, rec), onRunEnd: (m, rr, o) => this.onRunEnd(m, rr, o) })
+      const r = await startRun({ ctx: this.ctx, logger: this.logger, model, run, onRunStart: (m, rr, rec) => this.onRunStart(m, rr, rec), onRunEnd: (m, rr, o) => this.onRunEnd(m, rr, o), offload: this.offloadDispatch })
       if (!r.ok) createError = r.error
     } catch (err) {
       // Same defense-in-depth guard as the tick path: an unforeseen startRun rejection is
