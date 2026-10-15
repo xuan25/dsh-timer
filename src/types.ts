@@ -38,6 +38,13 @@ export interface RunSpec {
    * offload). The syntax is judged by the offload parser at sweep time: an invalid value warns
    * and resolves to 0, never rejecting the job (the schema checks the type only). */
   sessionRetention?: number | string | null
+  /** Reasoning effort of the run session: a member of the closed level set
+   * (REASONING_EFFORTS, validator.ts), passed through to the framework's
+   * AgentOptions.reasoningEffort. Absent or `null` = the framework's provider
+   * default. The framework re-checks the per-model support of the route at
+   * first request (a level the model does not declare = a turn error, surfaced
+   * in the run record). */
+  reasoningEffort?: string | null
 }
 
 /** Job spec (validated shape of the job file JSON; the raw unvalidated input type is `unknown`). */

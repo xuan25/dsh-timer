@@ -104,6 +104,12 @@ check('job: sessionRetention null accepted (retain)', () =>
   expectValid(vJob, 'job: sessionRetention null', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: null } }))
 check('job: sessionRetention wrong type rejected', () =>
   expectInvalid(vJob, 'job: sessionRetention boolean', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', sessionRetention: true } }))
+check('job: reasoningEffort level accepted', () =>
+  expectValid(vJob, 'job: reasoningEffort level', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: 'low' } }))
+check('job: reasoningEffort null accepted (explicit unset)', () =>
+  expectValid(vJob, 'job: reasoningEffort null', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: null } }))
+check('job: reasoningEffort outside the closed set rejected', () =>
+  expectInvalid(vJob, 'job: reasoningEffort outside set', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: 'banana' } }))
 
 // -- state schema --
 const goodState = { schemaVersion: 1, jobId: 'demo', lastActivationMs: null, lastTriggerMs: null, calendars: {}, runs: [] }

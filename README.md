@@ -4,7 +4,7 @@ dsh-timer gives a dsh deployment a built-in job scheduler: when a trigger expire
 
 - Jobs live in a job directory, written by hand or with the nine-verb `timer` tool
 - Three trigger kinds: cron expressions and one-shot ISO times, intervals counted from the last run, and one-shot startup delays
-- Each run is a fresh prompted session with a configurable working directory, preset, model, and file policy
+- Each run is a fresh prompted session with a configurable working directory, preset, model, file policy, and reasoning effort
 - A per-job state file tracks the next trigger and the 50 most recent run records
 - systemd.timer-style behavior: persistent catch-up after downtime, overlap policies (skip/stop/allow), run-time limits, timezone and clock-rewind handling
 - Live rescan: the job directory is watched with a 500 ms debounce, so job edits take effect in seconds
@@ -77,7 +77,7 @@ The table below is a quick reference; see `schemas/job.schema.json` for the comp
 | `deferReactivation` | boolean | `false` | Applies only to jobs that have onCalendar conditions (on other jobs the value is accepted and ignored). When `true`, a condition that starts a run is suspended for the duration of that run (its due moments are skipped without advancing the phase) and is re-armed from the run end moment. When `false`, the phase advances at every due moment even while a run is in progress. |
 | `runtimeMaxSec` | time span, `0`, `infinity`, or `null` | no limit | A run that exceeds the limit is cancelled and recorded as `failed` with cause `timeout`. |
 | `overlap` | `skip`, `stop`, or `allow` | `skip` | Defines what happens when a trigger fires while a run is already in progress. `skip` consumes the trigger in place (the phase advances at the due moment and no catch-up fire happens after the run ends - a run longer than the interval swallows grid points); `stop` cancels the in-progress run first and then starts; `allow` starts a parallel run. |
-| `run` | object (required) | - | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, `policy`, and `sessionRetention` are optional - full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above; `sessionRetention` is covered in the Session-offload section below). |
+| `run` | object (required) | - | The run block. `prompt` is required and non-empty; `cwd`, `preset`, `model`, `policy`, `sessionRetention`, and `reasoningEffort` are optional - full field semantics in `schemas/job.schema.json` (run-cwd inheritance is covered in the Run-root section above; `sessionRetention` is covered in the Session-offload section below; `reasoningEffort` is a closed set `off/minimal/low/medium/high/xhigh/max` validated at load, absent or null = the framework's provider default). |
 
 Time spans use the systemd syntax: the units `us`/`usec`, `ms`/`msec`, `s`/`sec`/`second(s)`, `m`/`min`/`mins`/`minute(s)`, `h`/`hour(s)`, `d`/`day(s)`, `w`/`week(s)`, `M`/`month(s)` (approx. 30 days), `y`/`year(s)` (approx. 365 days) - case-sensitive (`m` is minutes, `M` is months) - where a bare number means seconds and units may be combined (for example `30s`, `5min`, `1h30min`, or `2d`). The `*Sec` field names follow the systemd time directive names; a `Sec` field value is a span string (or `null` where the field tolerates it) - a JSON number is never accepted. A span shorter than half a millisecond rounds to 0 ms and makes the job fire on every tick; prefer values of at least 1 ms.
 

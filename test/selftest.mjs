@@ -11,7 +11,7 @@ const { JOB_ID_RE, TICK_MS, CLOCK_JUMP_MS, parseSpan, parseRuntimeMax, getProfil
 const T = await import(path.join(PKG, 'lib/time.js'))
 const C = await import(path.join(PKG, 'lib/cron.js'))
 const R = await import(path.join(PKG, 'lib/rearm.js'))
-const { validateJob } = await import(path.join(PKG, 'lib/validator.js'))
+const { validateJob, REASONING_EFFORTS } = await import(path.join(PKG, 'lib/validator.js'))
 const S = await import(path.join(PKG, 'lib/state.js'))
 
 let passed = 0
@@ -163,7 +163,7 @@ function expectReject(name, spec, substr) {
     onActiveSec: '1h30min', onStartupSec: '30s',
     timeZone: 'Asia/Shanghai', persistent: true, deferReactivation: true,
     runtimeMaxSec: '10min', overlap: 'stop',
-    run: { prompt: 'p', cwd: '/tmp/x', preset: 'pp', model: 'mm', policy: 'read-only' },
+    run: { prompt: 'p', cwd: '/tmp/x', preset: 'pp', model: 'mm', policy: 'read-only', reasoningEffort: 'low' },
   })
   ok('validator all-fields valid ok', r.ok === true, JSON.stringify(r.errors))
   eq('validator all-fields values', [r.tz, r.persistent, r.defer, r.overlap, r.runtimeMaxMs, r.onUnitActiveSecMs, r.onStartupSecMs], ['Asia/Shanghai', true, true, 'stop', 600_000, 5_400_000, 30_000])
@@ -245,13 +245,20 @@ expectReject('validator missing run block', { onCalendar: ['0 9 * * *'] }, 'miss
 expectReject('validator run.prompt empty', { onCalendar: ['0 9 * * *'], run: { prompt: '  ' } }, 'run.prompt')
 expectReject('validator run unknown field', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', extra: 1 } }, 'unknown field in run')
 expectReject('validator run.policy invalid', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', policy: 'all' } }, 'run.policy invalid')
+expectReject('validator run.reasoningEffort outside the closed set rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: 'banana' } }, 'run.reasoningEffort invalid')
+expectReject('validator run.reasoningEffort non-string non-null rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: 42 } }, 'run.reasoningEffort must be a string or null')
+expectReject('validator run.reasoningEffort empty string rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: '' } }, 'run.reasoningEffort invalid')
 expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p' }, 'run must be an object')
 {
   // run.cwd/preset/model/policy accept null (= explicit unset) and an empty string (= a legal string value).
-  const rNull = vj({ onCalendar: ['0 9 * * *'], run: { prompt: 'p', cwd: null, preset: null, model: null, policy: null } })
+  const rNull = vj({ onCalendar: ['0 9 * * *'], run: { prompt: 'p', cwd: null, preset: null, model: null, policy: null, reasoningEffort: null } })
   ok('validator run.* null accepted (explicit unset)', rNull.ok === true, JSON.stringify(rNull.errors))
   const rEmpty = vj({ onCalendar: ['0 9 * * *'], run: { prompt: 'p', cwd: '', preset: '', model: '' } })
   ok('validator run.* empty string accepted', rEmpty.ok === true, JSON.stringify(rEmpty.errors))
+  for (const level of REASONING_EFFORTS) {
+    const rLv = vj({ onCalendar: ['0 9 * * *'], run: { prompt: 'p', reasoningEffort: level } })
+    ok(`validator run.reasoningEffort accepts every closed-set level (${level})`, rLv.ok === true, JSON.stringify(rLv.errors))
+  }
   expectReject('validator run.cwd non-string non-null rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', cwd: 42 } }, 'run.cwd must be a string or null')
   expectReject('validator run.model non-string non-null rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', model: 42 } }, 'run.model must be a string or null')
   expectReject('validator run.policy non-string non-null rejected', { onCalendar: ['0 9 * * *'], run: { prompt: 'p', policy: 42 } }, 'run.policy invalid')
@@ -285,7 +292,7 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
     ok(`contract sync: tool schema ${f} declares a null branch`, fieldNode(toolSrc, f).includes("type: 'null'"))
   }
   const runNode = fieldNode(toolSrc, 'run')
-  for (const f of ['cwd', 'preset', 'model', 'policy']) {
+  for (const f of ['cwd', 'preset', 'model', 'policy', 'reasoningEffort']) {
     const jt = jobSchema.properties.run.properties[f].type
     ok(`contract sync: job.schema.json run.${f} is null-tolerant`, Array.isArray(jt) && jt.includes('null'))
     ok(`contract sync: tool schema run.${f} declares a null branch`, fieldNode(runNode, f).includes("type: 'null'"))
@@ -1174,6 +1181,16 @@ function naiveIsoCond(value, tz, consumed = false) {
     eq('settle: unparseable/foreign settings.yaml -> agentOptions absent', c.createdOpts.agentOptions, undefined)
     c = await settleCase([endEvent(0, { kind: 'completed' })])
     eq('settle: no model, no default source -> agentOptions absent', c.createdOpts.agentOptions, undefined)
+    // reasoning effort (isomorphic to the other session-producing plugins): a set level
+    // passes through to the create's agentOptions alongside the model route, alone when no
+    // route resolves; unset (absent or null) with no route source = the agentOptions key
+    // is omitted entirely.
+    c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { reasoningEffort: 'low' } })
+    eq('settle: reasoningEffort only, no route source -> the level is carried alone', c.createdOpts.agentOptions, { reasoningEffort: 'low' })
+    c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { reasoningEffort: 'off' }, defaultModel: { currentSelection: () => ({ provider: 'dep', model: 'dep-model' }) } })
+    eq('settle: reasoningEffort + default service -> route and level both carried', c.createdOpts.agentOptions, { provider: 'dep', model: 'dep-model', reasoningEffort: 'off' })
+    c = await settleCase([endEvent(0, { kind: 'completed' })], { modelSpec: { reasoningEffort: null } })
+    eq('settle: reasoningEffort null (= unset) with no route source -> agentOptions absent', c.createdOpts.agentOptions, undefined)
     // error reason without a message payload -> error stays null (no spurious text)
     c = await settleCase([endEvent(0, { kind: 'error', error: { code: 'E' } })])
     eq('settle: error reason without message -> error null', c.outcome.error, null)

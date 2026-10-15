@@ -130,7 +130,7 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
               type: 'object',
               additionalProperties: true,
               description:
-                'Per-run settings: prompt (required) plus the optional fields cwd, preset, model, and policy - see their field descriptions for the exact semantics.',
+                'Per-run settings: prompt (required) plus the optional fields cwd, preset, model, policy, and reasoningEffort - see their field descriptions for the exact semantics.',
               properties: {
                 prompt: {
                   type: 'string',
@@ -155,6 +155,13 @@ export function registerTool(ctx: Context, scheduler: TimerScheduler): () => voi
                     { type: 'null' },
                   ],
                   description: 'File access policy of the run session; null or an omitted field uses the deployment default.',
+                },
+                reasoningEffort: {
+                  oneOf: [
+                    { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] },
+                    { type: 'null' },
+                  ],
+                  description: 'Reasoning effort of the run session (closed set: off/minimal/low/medium/high/xhigh/max); null or an omitted field uses the framework provider default.',
                 },
               },
             },

@@ -43,7 +43,8 @@ The table below is a quick reference; the complete field reference (full field d
     "preset": "",               // agent preset of the run session; naming a preset that is unresolvable or broken fails the run as create_failed; null = same as omitting (the deployment's default preset)
     "model": "provider/model",  // model route: "provider/model", or a bare model id (rides the deployment's default provider); omitted or null = the deployment's default model selection, when a source provides it
     "policy": "workspace-write", // read-only|workspace-write|danger-full-access; null = deployment default
-    "sessionRetention": "24h"   // session offload window for the run session: non-negative integer ms, or 1-2 digits+unit segments (d/h/m/s/ms) in descending order (e.g. 24h, 4h30m, 90s, 5000ms; a bare numeric string is invalid); 0/null/omitted = retain in the store; an invalid value warns and counts as 0 - see section 7
+    "sessionRetention": "24h",  // session offload window for the run session: non-negative integer ms, or 1-2 digits+unit segments (d/h/m/s/ms) in descending order (e.g. 24h, 4h30m, 90s, 5000ms; a bare numeric string is invalid); 0/null/omitted = retain in the store; an invalid value warns and counts as 0 - see section 7
+    "reasoningEffort": "low"    // reasoning effort of the run session: closed set off|minimal|low|medium|high|xhigh|max (validated at load; the framework re-checks the per-model support of the route at first request); omitted or null = the framework's provider default
   }
 }
 ```

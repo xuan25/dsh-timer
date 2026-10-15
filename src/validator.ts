@@ -21,9 +21,20 @@ export const TOP_FIELDS = new Set([
   'overlap',
   'run',
 ])
-export const RUN_FIELDS = new Set(['prompt', 'cwd', 'preset', 'model', 'policy', 'sessionRetention'])
+export const RUN_FIELDS = new Set(['prompt', 'cwd', 'preset', 'model', 'policy', 'sessionRetention', 'reasoningEffort'])
 export const OVERLAPS = new Set(['skip', 'stop', 'allow'])
 export const POLICIES = new Set(['read-only', 'workspace-write', 'danger-full-access'])
+
+/**
+ * The closed reasoning-effort level set, mirrored from the framework's
+ * THINKING_LEVELS (dsh-llm-pi-ai): the framework re-checks per-model support
+ * at first request (a level the model does not declare = a turn error). The
+ * same seven levels are validated in sync by the other session-producing
+ * plugins (dsh-email, dsh-webhook-dispatcher); no shared package: the three
+ * copies stay in lock step, the spec in the repo's reports directory is the
+ * reference.
+ */
+export const REASONING_EFFORTS: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 /**
  * Validate a job spec (`unknown` input; the file-parse path and the timer add spec argument
@@ -165,6 +176,16 @@ export function validateJob(
       typeof run.sessionRetention !== 'number'
     ) {
       errors.push(`run.sessionRetention must be a number (milliseconds), a duration string, or null`)
+    }
+    // run.reasoningEffort: undefined or null = unset (the framework provider default
+    // applies); a string must be a member of the closed level set (the framework
+    // re-checks the per-model support of the route at first request).
+    if (run.reasoningEffort !== undefined && run.reasoningEffort !== null) {
+      if (typeof run.reasoningEffort !== 'string') {
+        errors.push(`run.reasoningEffort must be a string or null`)
+      } else if (!REASONING_EFFORTS.includes(run.reasoningEffort)) {
+        errors.push(`run.reasoningEffort invalid: ${JSON.stringify(run.reasoningEffort)} (allowed: ${REASONING_EFFORTS.join('/')})`)
+      }
     }
   }
 

@@ -79,6 +79,11 @@
         "sessionRetention": {
           "type": ["number", "string", "null"],
           "description": "Retention window of the run session (session offload): a non-negative integer number of milliseconds, or a duration string of one or two digits+unit segments (units d/h/m/s/ms) in descending order (e.g. 24h, 4h30m, 90s, 5000ms; a bare numeric string is invalid). A valid non-zero window means: once a settled run session has outlived the window (measured from dispatch time), the per-minute offload sweep moves it from the framework session store into the plugin's archive ($DSH_HOME/dsh-timer/archived-sessions/). 0, null, or omission keeps the run session in the store; an invalid value warns and is treated as 0."
+        },
+        "reasoningEffort": {
+          "type": ["string", "null"],
+          "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max", null],
+          "description": "Reasoning effort of the run session: a member of the closed level set off/minimal/low/medium/high/xhigh/max (validated at load; the framework re-checks the per-model support of the route at first request, a level the model does not declare = a first-turn error recorded in the run record). Omit the field or set it to null to use the framework's provider default."
         }
       },
       "description": "Execution block of the job. Each run creates a fresh agent session that fully inherits the profile environment."

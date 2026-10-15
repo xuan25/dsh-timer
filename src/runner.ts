@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import type { AgentHandle, AgentSetup } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { parse as parseYaml } from 'yaml'
@@ -210,31 +210,35 @@ function getPresetsService(ctx: Context): PresetService | undefined {
  *     applies.
  *  4. neither -> no route is passed; the first turn fails and the turn/end error message
  *     is surfaced in the run record (see turnErrorMessage).
- * The reasoning effort follows the selected provider/model's own default (the headless
- * convention).
+ * The reasoning effort: the job's `run.reasoningEffort` when set (validated at load
+ * against the closed level set), otherwise the framework's provider default.
  */
 async function resolveAgentOptions(
   ctx: Context,
   model: string | null | undefined,
-): Promise<{ provider?: string; model?: string }> {
-  const out: { provider?: string; model?: string } = {}
+  reasoningEffort?: string | null,
+): Promise<{ provider?: string; model?: string; reasoningEffort?: ReasoningEffortId }> {
+  const out: { provider?: string; model?: string; reasoningEffort?: ReasoningEffortId } = {}
   if (model) {
     const slash = model.indexOf('/')
     if (slash > 0) {
       out.provider = model.slice(0, slash)
       out.model = model.slice(slash + 1)
-      return out
+    } else {
+      const selection = await readDefaultModelSelection(ctx)
+      if (selection) out.provider = selection.provider
+      out.model = model
     }
+  } else {
     const selection = await readDefaultModelSelection(ctx)
-    if (selection) out.provider = selection.provider
-    out.model = model
-    return out
+    if (selection) {
+      out.provider = selection.provider
+      out.model = selection.model
+    }
   }
-  const selection = await readDefaultModelSelection(ctx)
-  if (selection) {
-    out.provider = selection.provider
-    out.model = selection.model
-  }
+  // The framework brands the effort (a plain string at the JSON boundary; the
+  // closed set was validated at job load).
+  if (reasoningEffort) out.reasoningEffort = ReasoningEffortId(reasoningEffort)
   return out
 }
 
@@ -357,7 +361,7 @@ export async function startRun({ ctx, logger, model, run, onRunStart, onRunEnd, 
   offload?.onDispatch(model.id, run.sessionId, cwd)
 
   const meta: { cwd: string; agentPreset?: string } = { cwd }
-  const agentOptions = await resolveAgentOptions(ctx, spec.model)
+  const agentOptions = await resolveAgentOptions(ctx, spec.model, spec.reasoningEffort)
   // Agent-plane composition: the framework's baseline composition carries only the host's
   // tool allowlist; the full agent plane is mounted through the host's agent preset
   // service via the create call's setup hook. The setup hook awaits mount and returns
