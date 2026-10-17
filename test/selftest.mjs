@@ -385,11 +385,17 @@ expectReject('validator run not an object', { onCalendar: ['0 9 * * *'], run: 'p
   ok('contract sync: state schema example running record carries a UUID sessionId', stateSchemaSrc.includes('"sessionId": "1a2b3c4d-5e6f-4a5b-8c7d-9e0f1a2b3c4d"') && !stateSchemaSrc.includes('"sessionId": null') && stateSchemaSrc.includes('"type": ["string", "null"]'))
 }
 {
-  // the shipped prompt wrapper pins
+  // the shipped prompt wrapper pins the
   // English convention line; guard the doc<->code string match so a CJK re-translation or
-  // rewording of the prompt wrapper breaks the gate instead of silently drifting.
+  // rewording of the prompt wrapper breaks the gate instead of silently drifting. The
+  // ordering guard pins the static -> dynamic layering: the invariant convention line
+  // precedes the per-job task prompt in the single first user message.
   const runnerSrc = readFileSync(path.join(PKG, 'src/runner.ts'), 'utf8')
-  ok('contract sync: runner prompt wrapper ships the pinned English convention line', runnerSrc.includes('export function buildRunPrompt(taskPrompt: string)') && runnerSrc.includes('(This is a ${PLUGIN_NAME} scheduled task run. When the task is done, output a plain-text result summary of 1-5 sentences, and nothing else.)'))
+  ok(
+    'contract sync: runner prompt wrapper ships the pinned English convention line',
+    runnerSrc.includes('export function buildRunPrompt(taskPrompt: string)') && runnerSrc.includes('(This is a ${PLUGIN_NAME} scheduled task run. When the task is done, output a plain-text result summary of 1-5 sentences, and nothing else.)'),
+  )
+  ok('contract sync: the convention line precedes the task prompt in the run prompt (static layer first)', runnerSrc.includes('and nothing else.)\\n\\n${taskPrompt}'))
 }
 {
   // loadState strips ALL unknown extra keys at

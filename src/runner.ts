@@ -34,9 +34,14 @@ import type { Context, JobModel, Logger, RunOutcome, RunRecord, RunTrigger } fro
  */
 export const CREATE_TIMEOUT_MS = 300_000
 
-/** Prompt = task + summary convention line. */
+/**
+ * Prompt = the static convention line (type marker + the result-summary convention,
+ * invariant across all jobs and runs) ahead of the per-job task prompt: the shared
+ * static -> dynamic layering of the sibling trigger plugins (repeated runs of one job
+ * share the whole prompt; across jobs every run now shares the convention-line prefix).
+ */
 export function buildRunPrompt(taskPrompt: string): string {
-  return `${taskPrompt}\n\n(This is a ${PLUGIN_NAME} scheduled task run. When the task is done, output a plain-text result summary of 1-5 sentences, and nothing else.)`
+  return `(This is a ${PLUGIN_NAME} scheduled task run. When the task is done, output a plain-text result summary of 1-5 sentences, and nothing else.)\n\n${taskPrompt}`
 }
 
 /**
